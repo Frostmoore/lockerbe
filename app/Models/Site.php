@@ -18,5 +18,5 @@ class Site extends Model implements TenantScoped
 {
     use BelongsToTenant, HasUuids;
 
-    protected $fillable = ['name', 'address', 'timezone', 'site_id'];
+    protected $fillable = ['name', 'address', 'timezone'];
 }
