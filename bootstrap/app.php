@@ -2,6 +2,7 @@
 
 use App\Domain\Audit\Console\VerifyAuditChain;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
+use App\Domain\Cabinet\Console\MarkOfflineCabinets;
 use App\Domain\Tenancy\Middleware\EstablishTenantContext;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -11,6 +12,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
@@ -24,7 +26,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     // I comandi vivono nel dominio (app/Domain/**/Console), non in app/Console/Commands:
     // la scoperta automatica di Laravel non li vede, quindi si registrano qui.
-    ->withCommands([VerifyAuditChain::class])
+    ->withCommands([VerifyAuditChain::class, MarkOfflineCabinets::class])
     ->withMiddleware(function (Middleware $middleware): void {
         // In testa a TUTTO: le policy RLS sono fail-closed, quindi senza contesto non si
         // vedrebbe nemmeno la tabella `users` — e nessuno potrebbe autenticarsi. Questo
@@ -36,6 +38,28 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => ResolveTenant::class,        // va DOPO auth:sanctum
             'mfa' => EnsureMfaSatisfied::class,
         ]);
+
+        /*
+         * ⚠️ ORDINE OBBLIGATORIO: ResolveTenant PRIMA di SubstituteBindings.
+         *
+         * `SubstituteBindings` (il route-model binding: /cabinets/{cabinet} → istanza di
+         * Cabinet) vive nel gruppo `api`, che per default gira PRIMA dei middleware di
+         * rotta — quindi prima di `tenant`. Risultato: il modello veniva risolto mentre il
+         * contesto era ancora in bypass, e un utente poteva caricare l'armadio di un ALTRO
+         * locale semplicemente indovinandone l'id. Il global scope non lo proteggeva,
+         * perche' al momento della query il filtro non era ancora attivo.
+         *
+         * Con questa priorita' l'ordine effettivo diventa:
+         *     auth:sanctum → tenant (ResolveTenant) → SubstituteBindings → can/Authorize
+         * cioe' il modello viene cercato **dentro** il tenant dell'utente, e un armadio
+         * altrui semplicemente non esiste: 404.
+         *
+         * Non e' un dettaglio di stile: e' il confine tra clienti su ogni rotta con un {id}.
+         */
+        $middleware->prependToPriorityList(
+            before: SubstituteBindings::class,
+            prepend: ResolveTenant::class,
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Envelope d'errore uniforme (piano §10): { "error": { code, message, details } }.

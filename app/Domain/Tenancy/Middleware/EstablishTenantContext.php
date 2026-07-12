@@ -30,15 +30,16 @@ final class EstablishTenantContext
 
     public function handle(Request $request, Closure $next): Response
     {
-        $this->context->bypass();
-
-        try {
-            return $next($request);
-        } finally {
-            // La connessione al database puo' essere riusata dalla richiesta successiva
-            // (worker long-running, Octane): lasciare in giro un tenant impostato
-            // significherebbe farlo ereditare a qualcun altro.
-            $this->context->forget();
-        }
+        // `runWithBypass` apre in bypass e, qualunque cosa succeda, **ripristina lo stato
+        // precedente**. Il ripristino conta: la connessione al database puo' essere riusata
+        // dalla richiesta successiva (worker long-running, Octane), e lasciare in giro un
+        // tenant impostato significherebbe farlo ereditare a qualcun altro.
+        //
+        // In una richiesta HTTP vera lo stato precedente e' quello vuoto (fail-closed), che
+        // e' esattamente dove vogliamo tornare. In console — dove il contesto parte in
+        // bypass — ripristina il bypass, invece di lasciare il processo cieco: e' cio' che
+        // permette a un test di continuare a interrogare il database dopo una chiamata HTTP.
+        /** @var Response */
+        return $this->context->runWithBypass(fn (): Response => $next($request));
     }
 }

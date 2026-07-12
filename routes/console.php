@@ -13,3 +13,8 @@ use Illuminate\Support\Facades\Schedule;
 // Se la catena di hash dell'audit si rompe, qualcuno ha riscritto la storia — e noi
 // vogliamo saperlo entro un'ora, non il giorno che serve la prova in tribunale.
 Schedule::command('audit:verify-chain')->hourly();
+
+// ⚠️ Se questo non gira, gli armadi restano `online` per sempre — e da F4 un armadio
+// creduto online accetta comandi di apertura che verranno consegnati chissa' quando.
+// E' la difesa contro il rischio #1 del sistema (§8), e vive qui.
+Schedule::command('cabinets:mark-offline')->everyMinute();

@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AuthController;
+use App\Http\Controllers\Api\V1\CabinetController;
+use App\Http\Controllers\Api\V1\LockerController;
 use App\Http\Controllers\Api\V1\MfaController;
 use App\Http\Controllers\Api\V1\PlatformSettingController;
 use Illuminate\Support\Facades\Route;
@@ -43,5 +45,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
 
         Route::patch('platform/settings', [PlatformSettingController::class, 'update'])
             ->middleware('can:tenant.manage');
+
+        /*
+         * Inventario (F2). L'autorizzazione fine sta nelle Policy (CabinetPolicy,
+         * LockerPolicy); l'isolamento tra clienti NON e' qui — lo fanno global scope e RLS,
+         * e un armadio di un altro tenant produce 404 gia' nel route-model binding.
+         *
+         * Nota: NON esiste ancora `POST /lockers/{id}/open`. L'apertura arriva in F4,
+         * insieme al TTL e al rifiuto verso gli armadi offline: prima le difese, poi l'arma.
+         */
+        Route::get('cabinets', [CabinetController::class, 'index']);
+        Route::post('cabinets', [CabinetController::class, 'store']);
+        Route::get('cabinets/{cabinet}', [CabinetController::class, 'show']);
+        Route::patch('cabinets/{cabinet}', [CabinetController::class, 'update']);
+        Route::get('cabinets/{cabinet}/lockers', [CabinetController::class, 'lockers']);
+
+        Route::get('lockers/{locker}', [LockerController::class, 'show']);
+        Route::patch('lockers/{locker}', [LockerController::class, 'update']);
     });
 });
