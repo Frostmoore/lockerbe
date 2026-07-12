@@ -24,36 +24,41 @@ sessioni, pagamenti, comandi di apertura, aggiornamenti OTA e audit log.
 
 ## Requisiti
 
-- PHP 8.3+ · Composer 2
-- PostgreSQL 16+
-- Redis
-- Un broker MQTT (Mosquitto / EMQX) per il dialogo con i dispositivi
+- PHP 8.3+ (estensione `pdo_pgsql`) · Composer 2
+- Docker (per Postgres e Redis: `docker-compose.yml`)
+- Un broker MQTT (Mosquitto / EMQX) — solo da F5 in poi
 
 ## Setup
 
 ```bash
+docker compose up -d       # PostgreSQL 16 + Redis 7
 composer install
 cp .env.example .env
 php artisan key:generate
-```
-
-Configura il database in `.env`:
-
-```env
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=lockerbe
-DB_USERNAME=lockerbe
-DB_PASSWORD=...
-```
-
-Poi:
-
-```bash
-php artisan migrate
+composer migrate           # NON `php artisan migrate` — vedi sotto
 php artisan serve
 ```
+
+### I due ruoli del database, e perché
+
+Il `docker-compose` crea **due** ruoli Postgres, e la distinzione è una misura di
+sicurezza, non uno stile:
+
+| Ruolo | Cosa fa | Perché |
+|---|---|---|
+| `locker_owner` | possiede lo schema, esegue **solo** le migration | — |
+| `locker_app` | il runtime dell'applicazione | **non** superuser, **non** owner, `NOBYPASSRLS` |
+
+L'isolamento fra tenant si appoggia alla **Row-Level Security** di Postgres. Ma le policy
+RLS **non si applicano ai superuser**, e non si applicano al proprietario delle tabelle
+salvo `FORCE`. Se l'applicazione girasse come proprietario o superuser, l'isolamento
+sarebbe scavalcato **in silenzio**: nessun errore, nessun test rosso, e i vani di un
+cliente visibili (o apribili) da un altro.
+
+Conseguenza pratica: `locker_app` **non ha `CREATE`** sullo schema, quindi
+`php artisan migrate` fallisce di proposito. Usa `composer migrate` (o
+`--database=pgsql_owner`). Vale anche per i test: lo schema viene creato dall'owner, le
+query girano come app — vedi `tests/Concerns/RefreshDatabaseAsOwner.php`.
 
 ## Modalità MOCK (sviluppo)
 
@@ -101,14 +106,22 @@ d'ambiente. Nessuna riscrittura del resto.
 4. **L'OTA si fa a stadi**, mai in push massivo: un pacchetto difettoso metterebbe fuori uso
    tutti gli armadi di tutti i clienti contemporaneamente.
 
-## Test
+## Qualità
 
 ```bash
-php artisan test
+composer check     # Pint (stile) + PHPStan livello 8 (Larastan) + Pest
+vendor/bin/pest    # solo i test
 ```
+
+I test girano su **PostgreSQL**, mai su SQLite in memoria: il test più importante del
+progetto — l'isolamento fra tenant — verifica la RLS, che SQLite non ha. Su SQLite
+passerebbe sempre, anche con l'isolamento rotto. Stessa regola in CI
+(`.gitea/workflows/ci.yml`).
 
 ## Stato
 
-Scheletro Laravel creato. Implementazione da avviare dalle milestone **M0** (fondamenta) e
-**M1** (tenancy + RBAC + audit) descritte nel piano — le fondamenta **prima** di qualunque
-comando fisico.
+**F0 — Fondamenta: completata.** Postgres (due ruoli) + Redis via Docker, Sanctum, spatie
+permission, Pest, Pint, Larastan livello 8, CI, PK UUID v7, `config/locker.php`.
+
+Prossima: **F1 — Tenancy + RBAC + Audit**, che viene *prima* di qualsiasi comando fisico.
+Fasi e sottofasi: §21 del piano (`memory/plan_locker_server.md` nel repo `locker`).

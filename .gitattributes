@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# Girano dentro container Linux: con CRLF non partono ("bad interpreter").
+*.sh text eol=lf
+
 *.blade.php diff=html
 *.css diff=css
 *.html diff=html

@@ -23,9 +23,16 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
+        <!--
+            I test girano su PostgreSQL, non su SQLite in memoria. Non e' pignoleria:
+            il test piu' importante del progetto (isolamento fra tenant, piano §17.1)
+            verifica la Row Level Security, che SQLite non ha. Su SQLite passerebbe
+            sempre, mentendo.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="locker_test"/>
         <env name="DB_URL" value=""/>
+        <env name="DB_OWNER_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

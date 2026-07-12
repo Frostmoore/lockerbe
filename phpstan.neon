@@ -1,0 +1,24 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    # Un armadietto che si apre da solo costa un cappotto al cliente: il livello e' il
+    # massimo (8) e non si abbassa per far passare la CI. Se un errore e' reale si
+    # corregge il codice; non si aggiungono baseline ne' @phpstan-ignore.
+    level: 8
+
+    paths:
+        - app
+        - database
+        - routes
+
+    # Fuori dall'analisi, con motivo:
+    #
+    # - `config/`: sono i file di configurazione spediti da Laravel, che usano env()
+    #   dove PHPStan inferisce bool|string (es. rtrim(env('AWS_URL')) in filesystems).
+    #   Sono attriti col framework, non bug nostri, e "correggerli" significherebbe
+    #   divergere dagli stub ufficiali a ogni aggiornamento.
+    #
+    # - `tests/`: Pest lega $this dinamicamente dentro le closure e PHPStan non lo sa
+    #   ("Call to an undefined method TestCall::get()"). I test si verificano
+    #   eseguendoli, che e' anche il modo giusto di verificarli.

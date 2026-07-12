@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      # PostgreSQL, non SQLite: la CI deve poter eseguire i test di isolamento fra
+      # tenant (piano §17.1), che verificano la Row Level Security. Su SQLite quei
+      # test passerebbero sempre, anche con l'isolamento rotto: sarebbe una CI verde
+      # che non dimostra nulla.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_pgsql, mbstring, sodium
+          coverage: none
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      # Stessi due ruoli del docker-compose locale, e per la stessa ragione:
+      #   locker_owner -> possiede lo schema, esegue le migration
+      #   locker_app   -> runtime, NON superuser, NOBYPASSRLS: le policy lo governano
+      # Se la CI facesse girare i test come proprietario, le policy RLS sarebbero
+      # inerti e il test di isolamento passerebbe mentendo.
+      - name: Prepare database roles
+        env:
+          PGPASSWORD: postgres
+          POSTGRES_USER: postgres
+          # Dentro il container postgres, psql passa dal socket unix. Qui il server e'
+          # un service separato: senza PGHOST lo script cercherebbe un socket inesistente.
+          PGHOST: localhost
+        run: |
+          psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
+            -f docker/postgres/init/01-roles-and-databases.sql
+          bash docker/postgres/init/02-grants.sh
+        # 02-grants.sh e' lo stesso script che gira nel container: un solo posto in cui
+        # i privilegi di locker_app sono definiti, cosi' locale e CI non divergono.
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare application
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Pint (code style)
+        run: vendor/bin/pint --test
+
+      - name: PHPStan (Larastan, livello 8)
+        run: vendor/bin/phpstan analyse --no-progress
+
+      - name: Pest
+        run: vendor/bin/pest
