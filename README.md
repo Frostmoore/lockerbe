@@ -1,58 +1,114 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# lockerbe — Server Smart Locker (Laravel 13)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Backend del sistema **smart locker per guardaroba**. Gestisce tenant, armadi, vani,
+sessioni, pagamenti, comandi di apertura, aggiornamenti OTA e audit log.
 
-## About Laravel
+📄 Piano implementativo dettagliato: `memory/plan_locker_server.md` nel repo
+[`locker`](https://git.home.varitest.ovh/smp-webmaster/locker.git).
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Stack
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+| Ambito | Scelta |
+|---|---|
+| Framework | **Laravel 13.19** |
+| PHP | **^8.3** |
+| Database | **PostgreSQL 16+** (necessario per Row-Level Security) |
+| Cache / Code | Redis + Horizon |
+| Auth API | Laravel Sanctum |
+| RBAC | spatie/laravel-permission |
+| Canale device | MQTT (`php-mqtt/laravel-client`) |
+| Test | Pest |
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+> ⚠️ Laravel installa **SQLite** di default, ma questo progetto **richiede PostgreSQL**:
+> l'isolamento fra tenant si appoggia alla **Row-Level Security**, che SQLite non ha.
 
-## Learning Laravel
+## Requisiti
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+- PHP 8.3+ · Composer 2
+- PostgreSQL 16+
+- Redis
+- Un broker MQTT (Mosquitto / EMQX) per il dialogo con i dispositivi
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Setup
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+composer install
+cp .env.example .env
+php artisan key:generate
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Configura il database in `.env`:
 
-## Contributing
+```env
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_DATABASE=lockerbe
+DB_USERNAME=lockerbe
+DB_PASSWORD=...
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Poi:
 
-## Code of Conduct
+```bash
+php artisan migrate
+php artisan serve
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Modalità MOCK (sviluppo)
 
-## Security Vulnerabilities
+Pagamento e identità carta sono **simulabili con un bottone**, senza provider di pagamento
+né hardware NFC: permettono di testare l'intero flusso end-to-end.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```env
+LOCKER_PAYMENT_DRIVER=mock     # mock | nexi
+LOCKER_IDENTITY_DRIVER=mock    # mock | nfc
+LOCKER_MOCK_PANEL=true         # mai in produzione
+```
 
-## License
+Endpoint mock (solo fuori produzione):
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+| Endpoint | Simula |
+|---|---|
+| `POST /api/v1/mock/payments/{payment}/confirm` | pagamento riuscito → **il vano si apre** |
+| `POST /api/v1/mock/payments/{payment}/fail` | pagamento fallito → sessione annullata |
+| `POST /api/v1/mock/identity/tap` | tap della carta (registra al primo uso, poi riapre) |
+| `POST /api/v1/mock/devices/{cabinet}/ack` | ACK del dispositivo |
+| `POST /api/v1/mock/devices/{cabinet}/heartbeat` | dispositivo online |
+
+I mock usano **la stessa code-path** dei provider reali: passare al reale significa
+implementare i contratti `PaymentProvider` / `IdentityProvider` e cambiare una variabile
+d'ambiente. Nessuna riscrittura del resto.
+
+## Concetti
+
+- **Tenant** → cliente, con pannello di controllo dedicato
+- **Cabinet** (Armadio) → 1 dispositivo FCV5003, contiene N vani
+- **Locker** (vano) → indirizzato via RS-485 (board + canale)
+- **Session** → rapporto temporaneo utente ↔ vano (pagamento, riaperture, checkout)
+- **Command** → ordine di apertura verso il dispositivo: **firmato, idempotente, con scadenza**
+
+## Regole non negoziabili
+
+1. **Ogni comando di apertura ha un TTL.** Un `open` accodato mentre l'armadio è offline e
+   consegnato ore dopo aprirebbe un vano pieno di roba nel cuore della notte. Se il
+   dispositivo è offline l'API **fallisce esplicitamente** (`409`), invece di promettere
+   l'apertura per dopo.
+2. **L'isolamento fra tenant è imposto dal database** (RLS), non dalla disciplina di chi
+   scrive le query.
+3. **Ogni operazione sui vani finisce nell'audit log** (append-only, hash-chain): è la prova
+   di chi ha aperto cosa e quando.
+4. **L'OTA si fa a stadi**, mai in push massivo: un pacchetto difettoso metterebbe fuori uso
+   tutti gli armadi di tutti i clienti contemporaneamente.
+
+## Test
+
+```bash
+php artisan test
+```
+
+## Stato
+
+Scheletro Laravel creato. Implementazione da avviare dalle milestone **M0** (fondamenta) e
+**M1** (tenancy + RBAC + audit) descritte nel piano — le fondamenta **prima** di qualunque
+comando fisico.
