@@ -18,3 +18,10 @@ Schedule::command('audit:verify-chain')->hourly();
 // creduto online accetta comandi di apertura che verranno consegnati chissa' quando.
 // E' la difesa contro il rischio #1 del sistema (§8), e vive qui.
 Schedule::command('cabinets:mark-offline')->everyMinute();
+
+// ⚠️ Senza questo, un vano prenotato e mai pagato resta bloccato per sempre: un armadietto
+// vuoto che il sistema crede occupato.
+Schedule::command('sessions:cancel-expired-reservations')->everyMinute();
+
+// Fine serata (nel fuso del locale, mai sul giorno solare — §7.4).
+Schedule::command('sessions:close-expired')->everyFiveMinutes();

@@ -3,6 +3,10 @@
 use App\Domain\Audit\Console\VerifyAuditChain;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
 use App\Domain\Cabinet\Console\MarkOfflineCabinets;
+use App\Domain\Session\Console\CancelExpiredReservations;
+use App\Domain\Session\Console\CloseExpiredSessions;
+use App\Domain\Session\Exceptions\IllegalTransitionException;
+use App\Domain\Session\Exceptions\NoLockerAvailableException;
 use App\Domain\Tenancy\Middleware\EstablishTenantContext;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -26,7 +30,12 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     // I comandi vivono nel dominio (app/Domain/**/Console), non in app/Console/Commands:
     // la scoperta automatica di Laravel non li vede, quindi si registrano qui.
-    ->withCommands([VerifyAuditChain::class, MarkOfflineCabinets::class])
+    ->withCommands([
+        VerifyAuditChain::class,
+        MarkOfflineCabinets::class,
+        CancelExpiredReservations::class,
+        CloseExpiredSessions::class,
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         // In testa a TUTTO: le policy RLS sono fail-closed, quindi senza contesto non si
         // vedrebbe nemmeno la tabella `users` — e nessuno potrebbe autenticarsi. Questo
@@ -68,6 +77,33 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (Throwable $e, Request $request): ?JsonResponse {
             if (! $request->expectsJson() && ! $request->is('api/*')) {
                 return null;
+            }
+
+            /*
+             * Eccezioni di dominio → codici stabili.
+             *
+             * ⚠️ Nessuna delle due e' un errore del server. "L'armadio e' pieno" e "non puoi
+             * fare il checkout di una sessione non pagata" sono RISPOSTE, e il client deve
+             * poterle distinguere da un guasto — e fra loro — senza leggere una stringa in
+             * italiano.
+             */
+            if ($e instanceof NoLockerAvailableException) {
+                return new JsonResponse([
+                    'error' => [
+                        'code' => 'no_locker_available',
+                        'message' => $e->getMessage(),
+                    ],
+                ], JsonResponse::HTTP_CONFLICT);
+            }
+
+            if ($e instanceof IllegalTransitionException) {
+                return new JsonResponse([
+                    'error' => [
+                        'code' => 'illegal_transition',
+                        'message' => $e->getMessage(),
+                        'details' => ['from' => $e->from, 'event' => $e->event],
+                    ],
+                ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
             }
 
             if ($e instanceof ValidationException) {

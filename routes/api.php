@@ -4,7 +4,11 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CabinetController;
 use App\Http\Controllers\Api\V1\LockerController;
 use App\Http\Controllers\Api\V1\MfaController;
+use App\Http\Controllers\Api\V1\MockController;
 use App\Http\Controllers\Api\V1\PlatformSettingController;
+use App\Http\Controllers\Api\V1\PublicSessionController;
+use App\Http\Controllers\Api\V1\SessionController;
+use App\Support\MockPanel;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -62,5 +66,45 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
 
         Route::get('lockers/{locker}', [LockerController::class, 'show']);
         Route::patch('lockers/{locker}', [LockerController::class, 'update']);
+
+        // Sessioni (F3).
+        Route::get('sessions', [SessionController::class, 'index'])->middleware('can:session.view');
+        Route::post('sessions', [SessionController::class, 'store'])->middleware('can:session.view');
+        Route::get('sessions/{session}', [SessionController::class, 'show'])->middleware('can:session.view');
+        Route::post('sessions/{session}/checkout', [SessionController::class, 'checkout'])
+            ->middleware('can:session.checkout');
     });
 });
+
+/*
+ * PUBBLICHE — il cliente che ha depositato il cappotto (piano §10).
+ *
+ * ⚠️ Nessuna autenticazione: chi deposita non ha un account (§4). Ha solo il token che gli
+ * e' stato dato al momento del pagamento. Il tenant si ricava DAL TOKEN — vedi
+ * PublicSessionController::resolveSession().
+ *
+ * ⚠️ Rate limit stretto: quel token e' l'unica cosa che separa un estraneo dal cappotto di
+ * qualcun altro. Senza limite, lo si potrebbe cercare a forza bruta.
+ */
+Route::prefix('public/sessions')->middleware('throttle:10,1')->group(function (): void {
+    Route::get('{token}', [PublicSessionController::class, 'show']);
+    Route::post('{token}/reopen', [PublicSessionController::class, 'reopen']);
+    Route::post('{token}/checkout', [PublicSessionController::class, 'checkout']);
+});
+
+/*
+ * I BOTTONI (piano §12) — pagamento e carta simulati.
+ *
+ * ⚠️ DOPPIO CANCELLO: esistono solo fuori da production E con `locker.mock_panel` acceso.
+ * In produzione queste rotte non devono nemmeno esistere (404, non 403). C'e' un test.
+ *
+ * Sono l'unico modo, oggi, di vedere girare il flusso completo: il FCV5003 non e'
+ * disponibile, Nexi non ha dato le credenziali, le carte NFC non esistono ancora.
+ */
+if (MockPanel::enabled()) {
+    Route::middleware(['auth:sanctum', 'tenant'])->prefix('mock')->group(function (): void {
+        Route::post('payments/{payment}/confirm', [MockController::class, 'confirmPayment']);
+        Route::post('payments/{payment}/fail', [MockController::class, 'failPayment']);
+        Route::post('identity/tap', [MockController::class, 'tapCard']);
+    });
+}

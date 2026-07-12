@@ -35,7 +35,14 @@ class Locker extends Model implements TenantScoped
     /** @use HasFactory<LockerFactory> */
     use BelongsToTenant, HasFactory, HasUuids;
 
-    protected $fillable = ['cabinet_id', 'number', 'board_address', 'channel', 'status'];
+    // ⚠️ `current_session_id` e `last_opened_at` DEVONO essere qui: senza, l'assegnazione
+    // mass-assignment li scarta in silenzio e il legame vano↔sessione non viene mai
+    // salvato. Il sistema sembra funzionare — la sessione esiste, il vano risulta occupato —
+    // ma nessuno sa piu' a quale sessione appartenga quel vano.
+    protected $fillable = [
+        'cabinet_id', 'number', 'board_address', 'channel', 'status',
+        'current_session_id', 'last_opened_at',
+    ];
 
     /**
      * Gli stati da cui una sessione puo' nascere. Usato dall'assegnazione "primo libero"
