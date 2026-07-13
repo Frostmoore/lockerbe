@@ -72,6 +72,12 @@ class Tenant extends Model implements TenantScoped
         return $this->hasMany(User::class);
     }
 
+    /** @return HasMany<Cabinet, $this> */
+    public function cabinets(): HasMany
+    {
+        return $this->hasMany(Cabinet::class);
+    }
+
     /**
      * @return array<string, string>
      */

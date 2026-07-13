@@ -71,6 +71,12 @@ class Cabinet extends Model implements TenantScoped
         return $this->hasMany(Locker::class);
     }
 
+    /** @return HasMany<Command, $this> */
+    public function commands(): HasMany
+    {
+        return $this->hasMany(Command::class);
+    }
+
     /** @return BelongsTo<Site, $this> */
     public function site(): BelongsTo
     {

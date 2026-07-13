@@ -6,6 +6,8 @@ use App\Domain\Tenancy\TenantContext;
 use App\Domain\Tenancy\TenantScope;
 use App\Domain\Tenancy\TenantScoped;
 use Database\Factories\UserFactory;
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -39,7 +41,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property Carbon|null $two_factor_confirmed_at
  */
 #[Hidden(['password', 'remember_token', 'two_factor_secret', 'two_factor_recovery_codes'])]
-class User extends Authenticatable implements TenantScoped
+class User extends Authenticatable implements FilamentUser, TenantScoped
 {
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, HasRoles, HasUuids, Notifiable, SoftDeletes;
@@ -69,6 +71,35 @@ class User extends Authenticatable implements TenantScoped
     public function isPlatformAdmin(): bool
     {
         return $this->tenant_id === null;
+    }
+
+    /**
+     * ⚠️ CHI PUO' ENTRARE IN QUALE PANNELLO (F6).
+     *
+     * Non e' una comodita' di navigazione: e' la porta. Filament chiama questo metodo su
+     * **ogni** richiesta del pannello, e un `false` significa 403 — sulla pagina come sulle
+     * richieste Livewire che la fanno vivere.
+     *
+     * ⚠️ Il pannello `admin` gira **in bypass**: un platform_admin ha `tenant_id = NULL`,
+     * quindi `ResolveTenant` non stringe niente e il database mostra i dati di *tutti* i
+     * clienti. E' voluto — quel pannello serve a questo — ma vuol dire che questa riga e'
+     * l'unica cosa che separa un utente di un locale dall'intero parco clienti. Non un
+     * pezzo: tutto. C'e' un test (`PanelTest`).
+     *
+     * Uno `status` diverso da `active` non entra da nessuna parte: sospendere un account
+     * deve avere effetto sui pannelli, non solo sulle API.
+     */
+    public function canAccessPanel(Panel $panel): bool
+    {
+        if ($this->status !== 'active') {
+            return false;
+        }
+
+        return match ($panel->getId()) {
+            'admin' => $this->isPlatformAdmin() && $this->hasRole('platform_admin'),
+            'app' => ! $this->isPlatformAdmin() && $this->hasAnyRole(['tenant_admin', 'tenant_staff']),
+            default => false,
+        };
     }
 
     /**

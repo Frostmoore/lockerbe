@@ -56,4 +56,9 @@ final class CabinetPolicy
     {
         return $user->can('locker.open_all');
     }
+
+    public function deleteAny(User $user): bool
+    {
+        return false;
+    }
 }
