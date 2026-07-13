@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Domain\Auth\Middleware\EnsureMfaSatisfiedInPanel;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
+use App\Filament\Auth\Login;
 use App\Filament\Pages\Mfa;
 use App\Filament\Resources\AuditLogResource;
 use App\Filament\Resources\CabinetResource;
@@ -58,7 +59,9 @@ class AppPanelProvider extends PanelProvider
             ->id('app')
             ->path('app')
             ->brandName('Locker')
-            ->login()
+            // ⚠️ Login con **username o email**: le persone che usano questo sistema hanno un
+            // username e lo sanno a memoria; l'email di servizio dell'account, spesso, no.
+            ->login(Login::class)
 
             /*
              * ⚠️⚠️ IL DEFAULT DI FILAMENT E' PERICOLOSO, E QUESTA RIGA LO SPEGNE.
