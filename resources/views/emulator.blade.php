@@ -110,7 +110,21 @@
 
     <div class="card">
         <h3>🚪 Sportello</h3>
-        <button class="btn" id="btn-closed">Ho richiuso lo sportello</button>
+
+        {{-- ⚠️ QUALE sportello. Prima i bottoni mandavano sempre il vano della sessione in
+             corso, e se non ce n'era una ripiegavano sul vano 1: chiudere il vano 2 era
+             semplicemente impossibile, e restava occupato per sempre. Nel mondo fisico lo
+             sportello che si richiude lo sceglie il cliente, non il software. --}}
+        <select id="door" style="width:100%;padding:8px;border-radius:6px;border:1px solid #2a3244;
+                                 background:#0f1115;color:#e6e8eb;margin-bottom:8px">
+            @foreach ($cabinet->lockers->sortBy('number') as $vano)
+                <option value="{{ $vano->number }}">
+                    Vano {{ $vano->number }} — {{ ['free' => 'libero', 'reserved' => 'prenotato', 'occupied' => 'occupato', 'checkout' => 'in riconsegna', 'out_of_service' => 'fuori servizio'][$vano->status] ?? $vano->status }}
+                </option>
+            @endforeach
+        </select>
+
+        <button class="btn" id="btn-closed">Ho richiuso questo sportello</button>
         <button class="btn off" id="btn-lockerr">⚠️ Serratura inceppata</button>
         <p class="l-dim" style="font-size:11px;margin:6px 0 0">
             La chiusura è la <b>conferma vera</b> della riconsegna (🔒 D5): senza sensore, il
@@ -500,8 +514,13 @@ function appoggiaCarta() {
 
 $('btn-tap').onclick = appoggiaCarta;
 
-$('btn-closed').onclick  = () => emit({ type: 'locker.closed', locker: stato.sessione?.locker_number ?? 1 });
-$('btn-lockerr').onclick = () => emit({ type: 'locker.error', locker: stato.sessione?.locker_number ?? 1, error: 'jammed' });
+// ⚠️ Lo sportello lo sceglie chi lo richiude, non il software. Prima questi due bottoni
+// mandavano il vano della sessione in corso, e senza sessione ripiegavano sul vano 1:
+// chiudere il vano 2 era impossibile, e restava occupato per sempre.
+const sportello = () => parseInt($('door').value, 10);
+
+$('btn-closed').onclick  = () => emit({ type: 'locker.closed', locker: sportello() });
+$('btn-lockerr').onclick = () => emit({ type: 'locker.error', locker: sportello(), error: 'jammed' });
 
 render();
 </script>
