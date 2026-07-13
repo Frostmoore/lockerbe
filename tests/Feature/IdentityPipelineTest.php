@@ -257,3 +257,83 @@ it('registra il caso in cui il cliente paga e non lascia l\'email', function () 
 
     Mail::assertNothingSent();
 });
+
+/*
+ * ═══ UNA CARTA, UN VANO ═══
+ */
+
+it('⚠️⚠️ non lascia prendere un SECONDO vano con la stessa carta — e non incassa', function () {
+    ['session' => $primo] = chiediVano($this->cabinet, 'nfc');
+
+    evento($this->cabinet, [
+        'type' => 'payment.card',
+        'session_id' => $primo->id,
+        'card_token' => 'LA-MIA-CARTA',
+    ]);
+
+    expect($primo->refresh()->status)->toBe('active');
+
+    // Stessa carta, secondo vano.
+    ['session' => $secondo] = chiediVano($this->cabinet, 'nfc');
+
+    evento($this->cabinet, [
+        'type' => 'payment.card',
+        'session_id' => $secondo->id,
+        'card_token' => 'LA-MIA-CARTA',
+    ]);
+
+    /*
+     * ⚠️ Rifiutato, e **senza incassare**: il controllo sta PRIMA della chiamata al provider.
+     * Farlo dopo significherebbe aver preso i soldi di un cliente a cui poi diciamo di no.
+     *
+     * Perché una carta tiene un vano solo:
+     *  - se ne aprisse due, chi la trovasse per terra avrebbe le chiavi di entrambi;
+     *  - e al tap il sistema non saprebbe *quale* aprire: la risoluzione prende la sessione più
+     *    recente, quindi il PRIMO vano — pagato, pieno — diventerebbe irraggiungibile con la
+     *    sua stessa carta.
+     */
+    $secondo->refresh();
+
+    expect($secondo->status)->toBe('cancelled')
+        ->and($secondo->paid_at)->toBeNull()
+        // Il vano riservato torna libero, invece di restare bloccato fino al timeout.
+        ->and($secondo->locker()->firstOrFail()->status)->toBe('free');
+
+    $this->assertDatabaseHas('audit_logs', [
+        'action' => 'payment.card',
+        'error_code' => 'card_already_in_use',
+    ]);
+});
+
+it('⚠️ e il PRIMO vano resta apribile con la sua carta', function () {
+    ['session' => $primo] = chiediVano($this->cabinet, 'nfc');
+
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $primo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    ['session' => $secondo] = chiediVano($this->cabinet, 'nfc');
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $secondo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    // ⚠️ È il vero danno che il tentativo poteva fare: la carta che smette di aprire il vano in
+    // cui c'è il cappotto del cliente. Non deve succedere nemmeno per un istante.
+    expect(app(IdentityProvider::class)->resolve('LA-MIA-CARTA', $this->cabinet)?->id)
+        ->toBe($primo->id);
+});
+
+it('lascia riusare la carta DOPO aver riconsegnato', function () {
+    ['session' => $primo] = chiediVano($this->cabinet, 'nfc');
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $primo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    // Riconsegna completa: intento dichiarato, poi la carta. Poi lo sportello richiuso.
+    evento($this->cabinet, ['type' => 'identity.presented', 'token' => 'LA-MIA-CARTA', 'intent' => 'checkout']);
+    evento($this->cabinet, ['type' => 'locker.closed', 'locker' => $primo->locker()->firstOrFail()->number]);
+
+    expect($primo->refresh()->status)->toBe('closed');
+
+    // ⚠️ La carta è di nuovo libera: il vincolo è "un vano ALLA VOLTA", non "un vano per sempre".
+    // Una carta bruciata dopo il primo uso sarebbe una carta inutile.
+    ['session' => $secondo] = chiediVano($this->cabinet, 'nfc');
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $secondo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    expect($secondo->refresh()->status)->toBe('active')
+        ->and(app(IdentityProvider::class)->resolve('LA-MIA-CARTA', $this->cabinet)?->id)->toBe($secondo->id);
+});

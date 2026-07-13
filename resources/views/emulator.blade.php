@@ -426,6 +426,19 @@ function attendiPagamento() {
             log('pagamento confermato: identità creata', 'l-in');
             stato.schermo = 'open';
             render();
+            return;
+        }
+
+        // ⚠️ Il server ha RIFIUTATO, e non ha incassato. Il caso vero: questa carta tiene già
+        // un vano. Se il chiosco restasse lì ad aspettare, il cliente non capirebbe niente —
+        // e il vano riservato resterebbe bloccato fino alla scadenza della prenotazione.
+        if (r?.data?.status === 'cancelled') {
+            clearInterval(stato.pollPagamento);
+            log('pagamento rifiutato: questa carta tiene già un vano', 'l-warn');
+            alert('Questa carta ha già un vano in uso.\n\nRiconsegna quello prima di prenderne un altro: una carta apre un vano solo — altrimenti, chi la trovasse per terra avrebbe le chiavi di entrambi.');
+            stato.schermo = 'home';
+            stato.sessione = null;
+            render();
         }
     }, 2000);
 }

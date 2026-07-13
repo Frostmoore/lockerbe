@@ -3,6 +3,7 @@
 namespace App\Domain\Identity\Services;
 
 use App\Domain\Audit\AuditLogger;
+use App\Domain\Identity\Contracts\IdentityProvider;
 use App\Mail\CodiceAccesso;
 use App\Models\Identity;
 use App\Models\Payment;
@@ -37,7 +38,10 @@ use Random\RandomException;
  */
 final class IdentityIssuer
 {
-    public function __construct(private readonly AuditLogger $audit) {}
+    public function __construct(
+        private readonly AuditLogger $audit,
+        private readonly IdentityProvider $identities,
+    ) {}
 
     /**
      * Dopo che il pagamento e' confermato: dai al cliente il modo di riaprire il suo vano.
@@ -85,6 +89,31 @@ final class IdentityIssuer
                 'session_id' => $session->id,
                 'result' => 'fail',
                 'error_code' => 'no_card_token',
+            ]);
+
+            return;
+        }
+
+        /*
+         * ⚠️ RETE DI SICUREZZA: una carta tiene **al piu' un vano alla volta**.
+         *
+         * Il controllo vero sta prima, in `DeviceEventHandler::cardPayment()`, dove si puo'
+         * ancora **non incassare**. Se scatta qui vuol dire che qualcuno ha confermato un
+         * pagamento per un'altra strada senza controllare: i soldi sono gia' presi, e non c'e'
+         * piu' niente di buono da fare.
+         *
+         * Ma **creare il doppione sarebbe peggio**: la risoluzione prende la sessione piu'
+         * recente, quindi il vano precedente — pagato, pieno — diventerebbe irraggiungibile
+         * con la sua stessa carta, in silenzio. Meglio nessuna identita' e una riga urlata nel
+         * registro: almeno lo staff sa che deve intervenire.
+         */
+        if ($this->identities->hasActiveSession($token)) {
+            $this->audit->log('identity.issue', [
+                'cabinet_id' => $session->cabinet_id,
+                'locker_id' => $session->locker_id,
+                'session_id' => $session->id,
+                'result' => 'fail',
+                'error_code' => 'card_already_in_use',
             ]);
 
             return;

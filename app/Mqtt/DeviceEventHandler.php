@@ -296,6 +296,39 @@ final class DeviceEventHandler
         /** @var Payment $payment */
         $payment = $session->payment()->firstOrFail();
 
+        /*
+         * ⚠️⚠️ QUESTA CARTA TIENE GIA' UN VANO? Allora **non si incassa**.
+         *
+         * Il controllo sta QUI, **prima** di chiamare il provider, e non e' pignoleria: se lo
+         * facessimo dopo, avremmo preso i soldi di un cliente a cui poi dobbiamo dire di no —
+         * e ci resterebbe un rimborso da fare a mano.
+         *
+         * Perche' una carta puo' tenere un vano solo:
+         *
+         *  - se ne aprisse due, **chi la trovasse per terra avrebbe le chiavi di entrambi**;
+         *  - e al tap il sistema non saprebbe *quale* aprire. La risoluzione prende la sessione
+         *    piu' recente: il primo vano diventerebbe **irraggiungibile con la propria carta**.
+         *    Il cliente ha pagato, il cappotto e' dentro, e solo lo staff puo' tirarlo fuori.
+         *
+         * La sessione si annulla: il vano riservato torna **libero** invece di restare bloccato
+         * per il timeout della prenotazione. E il chiosco, che sta guardando lo stato della
+         * sessione, se ne accorge e lo dice al cliente.
+         */
+        if ($this->identities->hasActiveSession($cardToken)) {
+            $this->sessions->failPayment($payment);
+
+            $this->audit->log('payment.card', [
+                'cabinet_id' => $cabinet->id,
+                'locker_id' => $session->locker_id,
+                'session_id' => $session->id,
+                'actor_type' => 'device',
+                'result' => 'fail',
+                'error_code' => 'card_already_in_use',
+            ]);
+
+            return;
+        }
+
         $esito = $this->payments->handleCardPayment([
             'provider_ref' => $payment->provider_ref,
             'card_token' => $cardToken,

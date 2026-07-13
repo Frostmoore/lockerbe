@@ -57,21 +57,32 @@ final class MockIdentityProvider implements IdentityProvider
             throw new RuntimeException('Non si lega una carta a una sessione non attiva.');
         }
 
-        $hash = Identity::hashToken($rawToken);
-
-        $giaLegata = Identity::query()
-            ->where('token_hash', $hash)
-            ->whereHas('session', fn ($query) => $query->where('status', 'active'))
-            ->exists();
-
-        if ($giaLegata) {
+        if ($this->hasActiveSession($rawToken)) {
             throw new RuntimeException('Questa carta e\' gia\' legata a un altro vano in uso.');
         }
 
         return Identity::create([
             'session_id' => $session->id,
             'type' => 'mock_card',
-            'token_hash' => $hash,
+            'token_hash' => Identity::hashToken($rawToken),
         ]);
+    }
+
+    /**
+     * ⚠️ Vedi il contratto: una carta tiene **al piu' un vano alla volta**.
+     *
+     * ⚠️ Non e' filtrata per armadio, ed e' deliberato: due vani in due armadi diversi dello
+     * stesso locale sono comunque due vani, e la carta ne aprirebbe uno solo — l'altro
+     * resterebbe chiuso con dentro la roba di qualcuno che ha pagato.
+     *
+     * (Il confine fra CLIENTI lo mette la RLS, non questa query: una carta di un altro locale
+     * non e' nemmeno visibile.)
+     */
+    public function hasActiveSession(string $rawToken): bool
+    {
+        return Identity::query()
+            ->where('token_hash', Identity::hashToken($rawToken))
+            ->whereHas('session', fn ($query) => $query->where('status', 'active'))
+            ->exists();
     }
 }
