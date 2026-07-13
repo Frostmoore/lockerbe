@@ -497,8 +497,24 @@ final class SessionManager
     }
 
     /** Tariffa del locale, in centesimi. */
+    /**
+     * Quanto costa un vano di QUESTO armadio.
+     *
+     * ⚠️ **Il prezzo scende a cascata**: armadio → locale → default di piattaforma.
+     *
+     * Il null sull'armadio non e' un buco: significa *"segui il listino del locale"*. Copiarci
+     * dentro il prezzo del locale sarebbe peggio — il giorno che il gestore ritocca il listino,
+     * gli armadi che non ha toccato resterebbero al prezzo vecchio, e nessuno se ne accorgerebbe
+     * finche' non arriva un cliente a lamentarsi.
+     *
+     * ⚠️ Sempre in **centesimi**: i float non tengono i soldi.
+     */
     private function tariffFor(Cabinet $cabinet): int
     {
+        if ($cabinet->tariff_cents !== null) {
+            return $cabinet->tariff_cents;
+        }
+
         $tenant = $cabinet->tenant()->firstOrFail();
 
         return (int) ($tenant->settings['tariff_cents'] ?? 500);

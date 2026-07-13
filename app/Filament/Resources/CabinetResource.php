@@ -4,8 +4,10 @@ namespace App\Filament\Resources;
 
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Command\Services\CommandIssuer;
+use App\Domain\Tenancy\TenantContext;
 use App\Filament\Resources\CabinetResource\Pages;
 use App\Models\Cabinet;
+use App\Models\Tenant;
 use App\Models\User;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -86,6 +88,29 @@ class CabinetResource extends Resource
                 ->visibleOn('create')
                 ->dehydrated(false),
 
+            /*
+             * ⚠️ IL PREZZO DI UN VANO DI QUESTO ARMADIO.
+             *
+             * In euro qui, in **centesimi** nel database: i float non tengono i soldi
+             * (`0.1 + 0.2 !== 0.3`), e un guardaroba che sbaglia un centesimo mille volte a
+             * sera lo sbaglia in bilancio.
+             *
+             * ⚠️ **Vuoto = eredita dal locale**, e non è un default mancante: è la scelta di
+             * *non* decidere per questo armadio. Se domani il gestore ritocca il listino, gli
+             * armadi lasciati vuoti lo seguono. Copiarci dentro il prezzo del locale
+             * "per comodità" li congelerebbe al prezzo di oggi, in silenzio.
+             */
+            TextInput::make('tariff_cents')
+                ->label('Prezzo di un vano')
+                ->prefix('€')
+                ->numeric()
+                ->minValue(0)
+                ->step('0.01')
+                ->helperText('Lascialo vuoto per usare il prezzo del locale.')
+                ->placeholder(fn (): string => number_format(self::tariffaDelLocale() / 100, 2, ',', '.').' (dal locale)')
+                ->formatStateUsing(fn (?int $state): ?string => $state === null ? null : number_format($state / 100, 2, '.', ''))
+                ->dehydrateStateUsing(fn (?string $state): ?int => filled($state) ? (int) round(((float) $state) * 100) : null),
+
             Select::make('status')
                 ->label('Stato')
                 ->options([
@@ -97,6 +122,26 @@ class CabinetResource extends Resource
                 ->helperText('Non si imposta a mano: lo dice il chiosco, con il suo heartbeat.')
                 ->visibleOn('edit'),
         ]);
+    }
+
+    /**
+     * La tariffa del locale: quella che un armadio senza prezzo proprio eredita.
+     *
+     * ⚠️ Nel pannello di piattaforma il contesto è in bypass e non c'è "il locale" — quindi si
+     * mostra il default di piattaforma. È un'indicazione, non una promessa: il prezzo vero lo
+     * calcola `SessionManager::tariffFor()` a partire dall'armadio.
+     */
+    private static function tariffaDelLocale(): int
+    {
+        $tenantId = app(TenantContext::class)->id();
+
+        if ($tenantId === null) {
+            return 500;
+        }
+
+        $tenant = Tenant::query()->find($tenantId);
+
+        return (int) ($tenant?->settings['tariff_cents'] ?? 500);
     }
 
     public static function table(Table $table): Table
@@ -127,6 +172,16 @@ class CabinetResource extends Resource
                 TextColumn::make('lockers_count')
                     ->label('Vani')
                     ->counts('lockers'),
+
+                // ⚠️ Si vede subito quali armadi hanno un prezzo proprio e quali seguono il
+                // listino del locale: un prezzo sbagliato lo si scopre da qui, non dalla cassa.
+                TextColumn::make('tariff_cents')
+                    ->label('Prezzo')
+                    ->money('EUR', divideBy: 100)
+                    ->placeholder('dal locale')
+                    ->description(fn (Cabinet $record): ?string => $record->tariff_cents === null
+                        ? number_format(($record->tenant?->settings['tariff_cents'] ?? 500) / 100, 2, ',', '.').' €'
+                        : null),
 
                 TextColumn::make('last_seen_at')
                     ->label('Visto l\'ultima volta')
