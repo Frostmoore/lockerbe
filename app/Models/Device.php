@@ -25,6 +25,9 @@ use Illuminate\Support\Carbon;
  * @property string $mqtt_client_id
  * @property string $status
  * @property Carbon|null $last_seen_at
+ * @property Carbon|null $paired_at
+ * @property string|null $paired_by
+ * @property Carbon|null $reenrollment_requested_at
  */
 class Device extends Model implements TenantScoped
 {
@@ -35,6 +38,17 @@ class Device extends Model implements TenantScoped
         'cabinet_id', 'serial', 'model', 'mqtt_client_id',
         'credential_fingerprint', 'firmware_version', 'ip_address', 'mac_address', 'status',
     ];
+
+    /** Ha chiesto di essere ri-abilitato: si e' ripresentato senza credenziali. */
+    public function needsReenrollment(): bool
+    {
+        return $this->reenrollment_requested_at !== null;
+    }
+
+    public function isRevoked(): bool
+    {
+        return $this->status === 'revoked';
+    }
 
     /** @return BelongsTo<Cabinet, $this> */
     public function cabinet(): BelongsTo
@@ -49,6 +63,8 @@ class Device extends Model implements TenantScoped
     {
         return [
             'last_seen_at' => 'datetime',
+            'paired_at' => 'datetime',
+            'reenrollment_requested_at' => 'datetime',
         ];
     }
 }

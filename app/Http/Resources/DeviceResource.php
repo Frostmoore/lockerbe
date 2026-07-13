@@ -30,6 +30,12 @@ class DeviceResource extends JsonResource
             'mac_address' => $this->mac_address,
             'status' => $this->status,
             'last_seen_at' => $this->last_seen_at?->toIso8601String(),
+            'paired_at' => $this->paired_at?->toIso8601String(),
+
+            // ⚠️ Il chiosco si e' ripresentato senza credenziali. Puo' essere legittimo
+            // (memoria azzerata) o un impostore che conosce il serial: il pannello lo mostra
+            // allo staff, che decide. Il server non ri-fida nessuno da solo.
+            'needs_reenrollment' => $this->needsReenrollment(),
         ];
     }
 }

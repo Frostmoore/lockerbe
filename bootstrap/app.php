@@ -3,6 +3,7 @@
 use App\Domain\Audit\Console\VerifyAuditChain;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
 use App\Domain\Cabinet\Console\MarkOfflineCabinets;
+use App\Domain\Device\Exceptions\PairingException;
 use App\Domain\Session\Console\CancelExpiredReservations;
 use App\Domain\Session\Console\CloseExpiredSessions;
 use App\Domain\Session\Console\FinalizePendingCheckouts;
@@ -89,6 +90,15 @@ return Application::configure(basePath: dirname(__DIR__))
              * poterle distinguere da un guasto — e fra loro — senza leggere una stringa in
              * italiano.
              */
+            if ($e instanceof PairingException) {
+                // Codice scaduto, armadio gia' accoppiato, credenziali non ancora pronte:
+                // sono risposte, non guasti. Il chiosco deve poterle distinguere senza
+                // leggere una stringa in italiano.
+                return new JsonResponse([
+                    'error' => ['code' => $e->errorCode, 'message' => $e->getMessage()],
+                ], JsonResponse::HTTP_CONFLICT);
+            }
+
             if ($e instanceof NoLockerAvailableException) {
                 return new JsonResponse([
                     'error' => [

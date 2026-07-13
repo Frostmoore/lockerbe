@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CabinetController;
+use App\Http\Controllers\Api\V1\DeviceController;
 use App\Http\Controllers\Api\V1\LockerController;
 use App\Http\Controllers\Api\V1\MfaController;
 use App\Http\Controllers\Api\V1\MockController;
@@ -64,6 +65,12 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
         Route::patch('cabinets/{cabinet}', [CabinetController::class, 'update']);
         Route::get('cabinets/{cabinet}/lockers', [CabinetController::class, 'lockers']);
 
+        // Identita' del chiosco: accoppiamento, ri-abilitazione, revoca.
+        // ⚠️ `pair` e' l'unico punto in cui si decide quale chiosco comanda quale armadio.
+        Route::post('cabinets/{cabinet}/pair', [DeviceController::class, 'pair']);
+        Route::post('devices/{device}/reissue', [DeviceController::class, 'reissue']);
+        Route::post('devices/{device}/revoke', [DeviceController::class, 'revoke']);
+
         Route::get('lockers/{locker}', [LockerController::class, 'show']);
         Route::patch('lockers/{locker}', [LockerController::class, 'update']);
 
@@ -79,6 +86,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
         Route::post('sessions/{session}/checkout/confirm', [SessionController::class, 'confirmCheckout'])
             ->middleware('can:session.checkout');
     });
+});
+
+/*
+ * IL CHIOSCO CHE CHIEDE UN'IDENTITA'.
+ *
+ * ⚠️ Le uniche rotte non autenticate e non tenant-scoped del sistema, e non poteva essere
+ * altrimenti: un FCV5003 appena tolto dalla scatola non ha nessuna identita' da esibire —
+ * sta chiedendo di averne una.
+ *
+ * Cio' che ottengono e' pero' **inerte**: un codice a sei cifre da mostrare a schermo. Finche'
+ * un operatore non lo accoppia a un armadio — stando fisicamente davanti a quell'armadio e
+ * leggendo il codice su quello schermo — il dispositivo non esiste per il sistema.
+ */
+Route::prefix('devices')->middleware('throttle:20,1')->group(function (): void {
+    Route::post('announce', [DeviceController::class, 'announce']);
+    Route::post('credentials', [DeviceController::class, 'credentials']);
 });
 
 /*
