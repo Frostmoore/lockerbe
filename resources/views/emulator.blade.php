@@ -386,6 +386,25 @@ async function render() {
         return;
     }
 
+    if (stato.schermo === 'rifiutata') {
+        // ⚠️ Un messaggio, non un alert: l'alert lo si chiude senza leggerlo, e il cliente resta
+        // convinto che la macchina sia rotta. Qui gli si dice cosa è successo E cosa deve fare.
+        s.innerHTML = `
+            <h1 style="color:#f87171">Carta già in uso</h1>
+            <div class="sub" style="max-width:460px">
+                <b>Con una carta si prende un vano solo.</b><br><br>
+                Questa carta sta già tenendo un vano: riconsegnalo prima di prenderne un altro.<br><br>
+                <span style="opacity:.7">Non ti abbiamo addebitato nulla.</span>
+            </div>
+            <div class="row">
+                <button class="big-btn warn" id="r-out" style="background:#b45309">🏁 Riconsegna quel vano</button>
+                <button class="big-btn gray" id="r-home">Indietro</button>
+            </div>`;
+        $('r-out').onclick  = () => { stato.intento = 'checkout'; stato.schermo = 'identify'; stato.sessione = null; render(); };
+        $('r-home').onclick = () => { stato.schermo = 'home'; stato.sessione = null; render(); };
+        return;
+    }
+
     if (stato.schermo === 'identify') {
         // ⚠️ Il chiosco non sa (e non deve sapere) se quella stringa è un codice o un token di
         // carta: manda una stringa, e il server sa a chi appartiene.
@@ -421,21 +440,33 @@ async function chiediVano(metodo) {
 }
 
 /**
- * ⚠️ Il chiosco NON sa quando il cliente ha pagato sul telefono: glielo deve chiedere al
- * server. Il pagamento avviene su un altro dispositivo, in un'altra sessione — l'unica cosa
- * che il chiosco possiede è il token pubblico.
+ * ⚠️ IL CHIOSCO CHIEDE AL SERVER COM'È FINITA. Non lo sa da solo.
+ *
+ * Il pagamento QR avviene su un ALTRO dispositivo (il telefono del cliente); il rifiuto della
+ * carta lo decide il server. In entrambi i casi il chiosco deve chiedere.
+ *
+ * ⚠️ Chiede alla rotta del CHIOSCO (`/kiosk/sessions/{id}`), non a quella pubblica del cliente.
+ * Prima usava `/public/sessions/{token}`, che ha un rate limit STRETTO — 10 al minuto, perché
+ * quel token è l'unica cosa che separa un estraneo dal cappotto di qualcun altro. Il chiosco ne
+ * faceva 30 al minuto: dopo venti secondi scattava il 429, il fetch riceveva un corpo d'errore
+ * invece dello stato, e il chiosco RESTAVA MUTO PER SEMPRE. Il cliente vedeva la schermata di
+ * pagamento e nient'altro — che è esattamente il bug segnalato.
  */
 function attendiPagamento() {
     clearInterval(stato.pollPagamento);
 
     stato.pollPagamento = setInterval(async () => {
-        if (!['pay', 'nfc'].includes(stato.schermo) || !stato.sessione) { clearInterval(stato.pollPagamento); return; }
+        if (!['pay', 'nfc'].includes(stato.schermo) || !stato.sessione) {
+            clearInterval(stato.pollPagamento);
+            return;
+        }
 
-        const r = await fetch('/api/v1/public/sessions/' + stato.sessione.public_token, {
-            headers: { 'Accept': 'application/json' },
-        }).then(x => x.json()).catch(() => null);
+        const r = await api('/sessions/' + stato.sessione.session_id);
 
-        if (r?.data?.status === 'active') {
+        // ⚠️ Se la chiamata fallisce non si resta muti: lo si dice, almeno al log seriale.
+        if (!r || !r.status) { log('non riesco a chiedere lo stato al server', 'l-err'); return; }
+
+        if (r.status === 'active') {
             clearInterval(stato.pollPagamento);
             log('pagamento confermato: identità creata', 'l-in');
             stato.schermo = 'open';
@@ -443,20 +474,17 @@ function attendiPagamento() {
             return;
         }
 
-        // ⚠️ Il server ha RIFIUTATO, e non ha incassato. Il caso vero: questa carta tiene già
-        // un vano. Se il chiosco restasse lì ad aspettare, il cliente non capirebbe niente —
-        // e il vano riservato resterebbe bloccato fino alla scadenza della prenotazione.
-        if (r?.data?.status === 'cancelled') {
+        // ⚠️ Il server ha RIFIUTATO, e non ha incassato. Il caso vero: questa carta tiene già un
+        // vano. Il cliente deve capirlo — restare sulla schermata di pagamento è il modo più
+        // veloce di farlo sentire davanti a una macchina rotta.
+        if (r.status === 'cancelled') {
             clearInterval(stato.pollPagamento);
-            log('pagamento rifiutato: questa carta tiene già un vano', 'l-warn');
-            alert('Questa carta ha già un vano in uso.\n\nRiconsegna quello prima di prenderne un altro: una carta apre un vano solo — altrimenti, chi la trovasse per terra avrebbe le chiavi di entrambi.');
-            stato.schermo = 'home';
-            stato.sessione = null;
+            log('pagamento RIFIUTATO: questa carta tiene già un vano', 'l-warn');
+            stato.schermo = 'rifiutata';
             render();
         }
     }, 2000);
 }
-
 
 // ── I bottoni del pannello hardware ───────────────────────────────────────────
 $('btn-power').onclick = (e) => {

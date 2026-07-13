@@ -337,3 +337,52 @@ it('lascia riusare la carta DOPO aver riconsegnato', function () {
     expect($secondo->refresh()->status)->toBe('active')
         ->and(app(IdentityProvider::class)->resolve('LA-MIA-CARTA', $this->cabinet)?->id)->toBe($secondo->id);
 });
+
+it('⚠️ dice al chiosco che la sessione e\' stata RIFIUTATA, senza rate limit', function () {
+    ['session' => $primo] = chiediVano($this->cabinet, 'nfc');
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $primo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    ['session' => $secondo] = chiediVano($this->cabinet, 'nfc');
+    evento($this->cabinet, ['type' => 'payment.card', 'session_id' => $secondo->id, 'card_token' => 'LA-MIA-CARTA']);
+
+    $device = $this->cabinet->device()->firstOrFail();
+    $token = $device->createToken('kiosk')->plainTextToken;
+
+    /*
+     * ⚠️ IL BUG CHE QUESTA ROTTA HA CHIUSO.
+     *
+     * Il chiosco chiedeva lo stato a `/public/sessions/{token}`, che ha un rate limit stretto —
+     * 10 al minuto — perché quel token è l'unica cosa che separa un estraneo dal cappotto di
+     * qualcun altro. Ma il chiosco lo interrogava ogni 2 secondi: 30 al minuto. Dopo venti
+     * secondi scattava il 429, il fetch riceveva un corpo d'errore invece dello stato, e il
+     * chiosco RESTAVA MUTO PER SEMPRE — il cliente vedeva la schermata di pagamento e nient'altro.
+     *
+     * Il chiosco è autenticato COME DEVICE: non deve passare dalla porta di servizio pensata per
+     * un estraneo con un token in mano. Trenta richieste di fila devono funzionare.
+     */
+    foreach (range(1, 30) as $i) {
+        $r = $this->withHeader('Authorization', 'Bearer '.$token)
+            ->getJson("/api/v1/kiosk/sessions/{$secondo->id}")
+            ->assertOk();
+    }
+
+    expect($r->json('status'))->toBe('cancelled');
+});
+
+it('⚠️ non lascia al chiosco guardare una sessione di un altro armadio', function () {
+    $altroTenant = Tenant::factory()->create();
+    $altroCabinet = Cabinet::factory()->forTenant($altroTenant)->online()->create();
+    Device::factory()->forCabinet($altroCabinet)->create();
+    Locker::factory()->forCabinet($altroCabinet)->create(['number' => 1, 'board_address' => 1, 'channel' => 1]);
+
+    ['session' => $altrui] = chiediVano($altroCabinet, 'qr');
+
+    $device = $this->cabinet->device()->firstOrFail();
+    $token = $device->createToken('kiosk')->plainTextToken;
+
+    // ⚠️ L'id arriva dalla rete. Un chiosco compromesso non deve poter spiare le sessioni di un
+    // altro locale — nemmeno solo per leggerne lo stato.
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->getJson("/api/v1/kiosk/sessions/{$altrui->id}")
+        ->assertNotFound();
+});

@@ -160,6 +160,19 @@ Route::post('devices/credentials', [DeviceController::class, 'credentials'])
 Route::middleware(['auth:sanctum', 'tenant'])->prefix('kiosk')->group(function (): void {
     Route::get('state', [KioskController::class, 'state']);
     Route::post('sessions', [KioskController::class, 'requestLocker']);
+
+    /*
+     * ⚠️ Il chiosco chiede com'e' finita la sessione che sta servendo (pagata? rifiutata?).
+     *
+     * Prima interrogava `/public/sessions/{token}`, che ha un rate limit STRETTO — 10 al minuto,
+     * perche' quel token e' l'unica cosa che separa un estraneo dal cappotto di qualcun altro.
+     * Il chiosco ne faceva 30 al minuto: dopo venti secondi scattava il 429 e il chiosco
+     * restava MUTO per sempre. Il cliente vedeva la schermata di pagamento e nient'altro.
+     *
+     * Il chiosco e' autenticato come device: non deve passare dalla porta di servizio pensata
+     * per un estraneo con un token in mano.
+     */
+    Route::get('sessions/{session}', [KioskController::class, 'sessionStatus']);
 });
 
 /*

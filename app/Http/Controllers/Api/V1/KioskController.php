@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Domain\Session\Services\SessionManager;
 use App\Models\Cabinet;
 use App\Models\Device;
+use App\Models\Session;
 use Endroid\QrCode\QrCode;
 use Endroid\QrCode\Writer\PngWriter;
 use Illuminate\Http\JsonResponse;
@@ -106,6 +107,42 @@ final class KioskController
     private function qr(string $payload): string
     {
         return (new PngWriter)->write(new QrCode($payload))->getDataUri();
+    }
+
+    /**
+     * ⚠️ COM'E' FINITA LA SESSIONE CHE STO SERVENDO?
+     *
+     * Il chiosco non sa da solo se il cliente ha pagato sul telefono, ne' se il server ha
+     * rifiutato la carta: deve chiederlo. E deve chiederlo **a questa rotta**, non a quella
+     * pubblica del cliente.
+     *
+     * ⚠️ **Perche' esiste, ed e' una lezione pagata.** Prima il chiosco interrogava
+     * `/public/sessions/{token}` ogni 2 secondi. Quella rotta ha un rate limit stretto — **10
+     * richieste al minuto** — perche' il token pubblico e' l'unica cosa che separa un estraneo
+     * dal cappotto di qualcun altro, e senza limite lo si cercherebbe a forza bruta. Il chiosco
+     * ne faceva **30 al minuto**: dopo venti secondi scattava il 429, il `fetch` riceveva un
+     * corpo d'errore invece dello stato, e il chiosco **restava muto per sempre**. Il cliente
+     * vedeva la schermata di pagamento e nient'altro.
+     *
+     * Il chiosco e' autenticato **come device**: non ha nessun bisogno di passare dalla porta
+     * di servizio pensata per un estraneo con un token in mano.
+     *
+     * ⚠️ E la sessione dev'essere **del proprio armadio**: l'id arriva dalla rete.
+     */
+    public function sessionStatus(Request $request, string $session): JsonResponse
+    {
+        $cabinet = $this->cabinetOf($request);
+
+        $sessione = Session::query()
+            ->where('id', $session)
+            ->where('cabinet_id', $cabinet->id)
+            ->firstOrFail();
+
+        return new JsonResponse([
+            'status' => $sessione->status,
+            'locker_number' => $sessione->locker()->first()?->number,
+            'payment_method' => $sessione->payment_method,
+        ]);
     }
 
     /**
