@@ -27,6 +27,7 @@ use Illuminate\Support\Carbon;
  * @property string $code
  * @property string $status
  * @property int|null $tariff_cents in CENTESIMI. NULL = eredita la tariffa del locale
+ * @property int|null $reservation_ttl in SECONDI. NULL = eredita dal locale
  * @property string|null $firmware_version
  * @property Carbon|null $last_seen_at
  * @property array<string, mixed> $settings
@@ -38,7 +39,7 @@ class Cabinet extends Model implements TenantScoped
 
     // ⚠️ `tariff_cents` NULL = "eredita dal locale". Non e' un default mancante: e' la scelta
     // di non decidere per questo armadio, e di seguire il listino se un giorno cambia.
-    protected $fillable = ['site_id', 'name', 'code', 'status', 'tariff_cents', 'settings'];
+    protected $fillable = ['site_id', 'name', 'code', 'status', 'tariff_cents', 'reservation_ttl', 'settings'];
 
     /**
      * L'armadio ha dato segni di vita di recente?

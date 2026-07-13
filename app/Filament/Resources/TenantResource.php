@@ -60,6 +60,21 @@ class TenantResource extends Resource
 
             TextInput::make('timezone')->label('Fuso orario')->default('Europe/Rome')->required(),
 
+            /*
+             * ⚠️ La durata predefinita della prenotazione: la ereditano tutti gli armadi che
+             * non ne hanno una propria. È una decisione commerciale — un locale di passaggio la
+             * vuole corta, un teatro lunga — e per questo sta qui e non in un file di config.
+             */
+            TextInput::make('settings.reservation_ttl')
+                ->label('Durata predefinita della prenotazione')
+                ->suffix('minuti')
+                ->numeric()
+                ->minValue(1)
+                ->maxValue(120)
+                ->helperText('Quanto tempo ha il cliente per pagare, prima che il vano torni libero.')
+                ->formatStateUsing(fn (mixed $state): int => (int) round(((int) ($state ?? config('locker.reservation.ttl'))) / 60))
+                ->dehydrateStateUsing(fn (?string $state): int => filled($state) ? (int) $state * 60 : (int) config('locker.reservation.ttl')),
+
             // ⚠️ Un locale può RENDERE OBBLIGATORIA la MFA, non può renderla facoltativa se la
             // piattaforma la impone: un'impostazione di tenant non deve poter essere più
             // permissiva di quella di piattaforma, altrimenti l'obbligo sarebbe una cortesia.

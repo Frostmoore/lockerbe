@@ -146,6 +146,33 @@ final class KioskController
     }
 
     /**
+     * ⚠️ IL CLIENTE HA CAMBIATO IDEA. Il vano torna libero **subito**.
+     *
+     * Non e' cortesia: e' **inventario**. Senza questo bottone, chi si ferma davanti alla
+     * schermata di pagamento e ci ripensa lascia il vano bloccato per tutta la durata della
+     * prenotazione — e in una serata di punta bastano pochi ripensamenti per far risultare
+     * pieno un armadio mezzo vuoto. Il cliente dopo se ne va, e nessuno sa perche'.
+     *
+     * ⚠️ Solo una sessione **non pagata**. Se i soldi sono stati presi, questo non e' un
+     * annullamento: e' un rimborso, ed e' un'altra cosa.
+     *
+     * ⚠️ E dev'essere una sessione del **proprio** armadio: l'id arriva dalla rete.
+     */
+    public function cancelSession(Request $request, string $session): JsonResponse
+    {
+        $cabinet = $this->cabinetOf($request);
+
+        $sessione = Session::query()
+            ->where('id', $session)
+            ->where('cabinet_id', $cabinet->id)
+            ->firstOrFail();
+
+        $this->sessions->cancelReservation($sessione);
+
+        return new JsonResponse(['status' => 'cancelled']);
+    }
+
+    /**
      * ⚠️ L'armadio lo decide **l'identita' del chiosco**, non la richiesta.
      */
     private function cabinetOf(Request $request): Cabinet

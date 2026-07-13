@@ -111,6 +111,28 @@ class CabinetResource extends Resource
                 ->formatStateUsing(fn (?int $state): ?string => $state === null ? null : number_format($state / 100, 2, '.', ''))
                 ->dehydrateStateUsing(fn (?string $state): ?int => filled($state) ? (int) round(((float) $state) * 100) : null),
 
+            /*
+             * ⚠️ QUANTO DURA UNA PRENOTAZIONE. È una decisione **commerciale**, non tecnica —
+             * per questo sta qui e non in una variabile d'ambiente.
+             *
+             * Un locale di passaggio la vuole **corta**: chi ci ripensa libera subito il vano.
+             * Un teatro, dove la gente paga con calma prima dello spettacolo, la vuole
+             * **lunga**: una prenotazione che scade mentre il cliente cerca gli occhiali è un
+             * cliente arrabbiato e un vano che si apre da solo alle spalle di nessuno.
+             *
+             * In minuti qui, in secondi nel database: si scrive come ci si pensa.
+             */
+            TextInput::make('reservation_ttl')
+                ->label('Durata della prenotazione')
+                ->suffix('minuti')
+                ->numeric()
+                ->minValue(1)
+                ->maxValue(120)
+                ->helperText('Quanto tempo ha il cliente per pagare, prima che il vano torni libero. Vuoto = come il locale.')
+                ->placeholder(fn (): string => (string) (int) round(self::prenotazioneDelLocale() / 60).' (dal locale)')
+                ->formatStateUsing(fn (?int $state): ?int => $state === null ? null : (int) round($state / 60))
+                ->dehydrateStateUsing(fn (?string $state): ?int => filled($state) ? (int) $state * 60 : null),
+
             Select::make('status')
                 ->label('Stato')
                 ->options([
@@ -133,15 +155,21 @@ class CabinetResource extends Resource
      */
     private static function tariffaDelLocale(): int
     {
+        return (int) (self::localeCorrente()?->settings['tariff_cents'] ?? 500);
+    }
+
+    /** La durata di prenotazione del locale, in secondi. */
+    private static function prenotazioneDelLocale(): int
+    {
+        return (int) (self::localeCorrente()?->settings['reservation_ttl']
+            ?? config('locker.reservation.ttl'));
+    }
+
+    private static function localeCorrente(): ?Tenant
+    {
         $tenantId = app(TenantContext::class)->id();
 
-        if ($tenantId === null) {
-            return 500;
-        }
-
-        $tenant = Tenant::query()->find($tenantId);
-
-        return (int) ($tenant?->settings['tariff_cents'] ?? 500);
+        return $tenantId === null ? null : Tenant::query()->find($tenantId);
     }
 
     public static function table(Table $table): Table

@@ -173,6 +173,10 @@ Route::middleware(['auth:sanctum', 'tenant'])->prefix('kiosk')->group(function (
      * per un estraneo con un token in mano.
      */
     Route::get('sessions/{session}', [KioskController::class, 'sessionStatus']);
+
+    // ⚠️ Il cliente ha cambiato idea: il vano torna libero SUBITO. Non e' cortesia, e'
+    // inventario — senza, un ripensamento blocca un vano per tutta la prenotazione.
+    Route::post('sessions/{session}/cancel', [KioskController::class, 'cancelSession']);
 });
 
 /*

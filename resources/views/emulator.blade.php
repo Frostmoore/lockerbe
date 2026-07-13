@@ -667,7 +667,11 @@ async function render() {
             <div class="row">
                 <a class="big-btn gray" style="text-decoration:none;text-align:center;display:block"
                    href="${p.qr_payload}" target="_blank">Apri la pagina (simula il telefono)</a>
+
+                <button class="big-btn gray" id="annulla-pay">Annulla</button>
             </div>`;
+
+        $('annulla-pay').onclick = annullaPrenotazione;
         attendiPagamento();
         return;
     }
@@ -686,7 +690,13 @@ async function render() {
                 <div style="font-weight:500;margin-top:6px">
                     È il tuo scontrino: senza, non potrai riprenderti la roba da solo.
                 </div>
+            </div>
+
+            <div class="row">
+                <button class="big-btn gray" id="annulla-nfc">Annulla</button>
             </div>`;
+
+        $('annulla-nfc').onclick = annullaPrenotazione;
         return;
     }
 
@@ -764,6 +774,27 @@ async function render() {
     }
 }
 
+
+/**
+ * ⚠️ IL CLIENTE HA CAMBIATO IDEA. Il vano torna libero SUBITO.
+ *
+ * Non è cortesia: è INVENTARIO. Senza questo bottone, chi si ferma davanti alla schermata di
+ * pagamento e ci ripensa lascia il vano bloccato per tutta la durata della prenotazione — e in
+ * una serata di punta bastano pochi ripensamenti per far risultare pieno un armadio mezzo
+ * vuoto. Il cliente dopo se ne va, e nessuno sa perché.
+ */
+async function annullaPrenotazione() {
+    clearInterval(stato.pollPagamento);
+
+    if (stato.sessione) {
+        const r = await api('/sessions/' + stato.sessione.session_id + '/cancel', {});
+        if (r?.status === 'cancelled') log('prenotazione annullata: il vano è di nuovo libero', 'l-warn');
+    }
+
+    stato.sessione = null;
+    stato.schermo = 'home';
+    render();
+}
 
 async function chiediVano(metodo) {
     const r = await api('/sessions', { method: metodo });

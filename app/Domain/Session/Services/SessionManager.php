@@ -72,7 +72,7 @@ final class SessionManager
             // sua carta.
             'payment_method' => $method === 'nfc' ? 'nfc' : 'qr',
             'public_token_hash' => Identity::hashToken($rawToken),
-            'reserved_until' => now()->addSeconds((int) config('locker.reservation.ttl')),
+            'reserved_until' => now()->addSeconds($this->reservationTtlFor($cabinet)),
             'expires_at' => $this->endOfNightFor($cabinet),
             'meta' => [],
         ]);
@@ -248,6 +248,45 @@ final class SessionManager
             ]);
 
             PaymentFailed::dispatch($payment);
+
+            return $session;
+        });
+    }
+
+    /**
+     * `created` --annullata dal cliente--> `cancelled`. Il vano torna **subito** libero.
+     *
+     * ⚠️ **Il bottone "annulla" non è cortesia: è inventario.** Senza, un cliente che cambia
+     * idea davanti alla schermata di pagamento lascia il vano bloccato per tutta la durata
+     * della prenotazione — e in una serata di punta bastano pochi ripensamenti per far
+     * risultare pieno un armadio mezzo vuoto. Il cliente successivo se ne va.
+     *
+     * ⚠️ Solo da `created`: non si annulla una sessione **pagata**. Se i soldi sono stati
+     * presi, questo non è un annullamento — è un rimborso, ed è un'altra cosa (e oggi non
+     * esiste: vedi il debito).
+     */
+    public function cancelReservation(Session $session): Session
+    {
+        if ($session->status !== 'created') {
+            throw new IllegalTransitionException($session->status, 'reservation.cancelled');
+        }
+
+        return DB::transaction(function () use ($session): Session {
+            /*
+             * ⚠️ Il pagamento resta `created`, e va bene così: **non è mai stato tentato**.
+             * Marcarlo `failed` racconterebbe una bugia — che qualcosa è andato storto — e
+             * quella bugia finirebbe nelle statistiche di conversione, dove un cliente che ha
+             * cambiato idea diventerebbe un pagamento rifiutato.
+             */
+            $this->releaseLocker($session);
+            $session->forceFill(['status' => 'cancelled', 'closed_at' => now()])->save();
+
+            $this->audit->log('session.cancelled', [
+                'cabinet_id' => $session->cabinet_id,
+                'locker_id' => $session->locker_id,
+                'session_id' => $session->id,
+                'context' => ['by' => 'customer'],
+            ]);
 
             return $session;
         });
@@ -509,6 +548,28 @@ final class SessionManager
      *
      * ⚠️ Sempre in **centesimi**: i float non tengono i soldi.
      */
+    /**
+     * Quanto dura la prenotazione su QUESTO armadio, in secondi.
+     *
+     * ⚠️ Stessa cascata del prezzo — **armadio → locale → default** — e per lo stesso motivo:
+     * il `null` significa *"segui il locale"*, non *"non impostato"*.
+     *
+     * ⚠️ E' una decisione **commerciale**, non tecnica. Un locale di passaggio vuole una
+     * finestra corta (il vano si libera subito se il cliente ci ripensa); un teatro, dove la
+     * gente paga con calma prima dello spettacolo, la vuole lunga — una prenotazione che scade
+     * mentre il cliente cerca gli occhiali e' un cliente arrabbiato.
+     */
+    private function reservationTtlFor(Cabinet $cabinet): int
+    {
+        if ($cabinet->reservation_ttl !== null) {
+            return $cabinet->reservation_ttl;
+        }
+
+        $tenant = $cabinet->tenant()->firstOrFail();
+
+        return (int) ($tenant->settings['reservation_ttl'] ?? config('locker.reservation.ttl'));
+    }
+
     private function tariffFor(Cabinet $cabinet): int
     {
         if ($cabinet->tariff_cents !== null) {

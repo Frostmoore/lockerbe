@@ -81,3 +81,118 @@ it('lascia mettere un vano GRATIS, e non lo confonde con "non deciso"', function
     // `!== null` li appiattirebbe, e il vano gratis costerebbe 8 euro.
     expect(prezzoDi($armadio))->toBe(0);
 });
+
+/*
+ * ═══ QUANTO DURA LA PRENOTAZIONE ═══
+ */
+
+it('usa la durata di prenotazione DELL\'ARMADIO quando ce l\'ha', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->online()->create([
+        'reservation_ttl' => 1800,   // mezz'ora: un teatro
+    ]);
+
+    Device::factory()->forCabinet($armadio)->create();
+    Locker::factory()->forCabinet($armadio)->create(['number' => 1, 'board_address' => 1, 'channel' => 1]);
+
+    /** @var Session $sessione */
+    $sessione = app(TenantContext::class)->runForTenant(
+        $this->tenant->id,
+        fn (): Session => app(SessionManager::class)->request($armadio)['session'],
+    );
+
+    /*
+     * ⚠️ È una decisione COMMERCIALE, non tecnica: un locale di passaggio la vuole corta, un
+     * teatro lunga — una prenotazione che scade mentre il cliente cerca gli occhiali è un
+     * cliente arrabbiato.
+     *
+     * ⚠️ `now()->diffInSeconds($futuro)`, non il contrario: Carbon restituisce una differenza
+     * **con segno**, e scritta al rovescio dà un numero negativo. Un'asserzione tipo
+     * `< 130` su un `-1800` passa — e passa per SEMPRE, qualunque cosa faccia il codice.
+     */
+    expect(now()->diffInSeconds($sessione->reserved_until))->toBeGreaterThan(1700);
+});
+
+it('eredita la durata DAL LOCALE quando l\'armadio non ne ha una', function () {
+    $this->tenant->forceFill(['settings' => ['reservation_ttl' => 120]])->save();
+
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->online()->create(['reservation_ttl' => null]);
+
+    Device::factory()->forCabinet($armadio)->create();
+    Locker::factory()->forCabinet($armadio)->create(['number' => 1, 'board_address' => 1, 'channel' => 1]);
+
+    /** @var Session $sessione */
+    $sessione = app(TenantContext::class)->runForTenant(
+        $this->tenant->id,
+        fn (): Session => app(SessionManager::class)->request($armadio->refresh())['session'],
+    );
+
+    // Vedi sopra: il verso della sottrazione conta.
+    expect(now()->diffInSeconds($sessione->reserved_until))
+        ->toBeGreaterThan(100)
+        ->toBeLessThan(130);
+});
+
+/*
+ * ═══ ANNULLA: il cliente ha cambiato idea ═══
+ */
+
+it('⚠️ libera il vano SUBITO quando il cliente annulla', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->online()->create();
+    $chiosco = Device::factory()->forCabinet($armadio)->create();
+    Locker::factory()->forCabinet($armadio)->create(['number' => 1, 'board_address' => 1, 'channel' => 1]);
+
+    /** @var Session $sessione */
+    $sessione = app(TenantContext::class)->runForTenant(
+        $this->tenant->id,
+        fn (): Session => app(SessionManager::class)->request($armadio)['session'],
+    );
+
+    expect($sessione->locker()->firstOrFail()->status)->toBe('reserved');
+
+    $token = $chiosco->createToken('kiosk')->plainTextToken;
+
+    /*
+     * ⚠️ NON È CORTESIA: È INVENTARIO.
+     *
+     * Senza questo bottone, chi si ferma davanti alla schermata di pagamento e ci ripensa lascia
+     * il vano bloccato per tutta la durata della prenotazione. In una serata di punta bastano
+     * pochi ripensamenti per far risultare pieno un armadio mezzo vuoto — e il cliente dopo se
+     * ne va senza che nessuno sappia perché.
+     */
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->postJson("/api/v1/kiosk/sessions/{$sessione->id}/cancel")
+        ->assertOk();
+
+    $sessione->refresh();
+
+    expect($sessione->status)->toBe('cancelled')
+        ->and($sessione->locker()->firstOrFail()->status)->toBe('free')
+        ->and($sessione->locker()->firstOrFail()->current_session_id)->toBeNull();
+
+    $this->assertDatabaseHas('audit_logs', ['action' => 'session.cancelled']);
+});
+
+it('⚠️ non lascia annullare una sessione GIA\' PAGATA', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->online()->create();
+    $chiosco = Device::factory()->forCabinet($armadio)->create();
+    Locker::factory()->forCabinet($armadio)->create(['number' => 1, 'board_address' => 1, 'channel' => 1]);
+
+    $sessione = app(TenantContext::class)->runForTenant($this->tenant->id, function () use ($armadio): Session {
+        ['session' => $s] = app(SessionManager::class)->request($armadio, null, 'nfc');
+        $p = $s->payment()->firstOrFail();
+        $p->forceFill(['payload' => ['card_token' => 'X']])->save();
+
+        return app(SessionManager::class)->confirmPayment($p);
+    });
+
+    $token = $chiosco->createToken('kiosk')->plainTextToken;
+
+    // ⚠️ Se i soldi sono stati presi, questo non è un annullamento: è un rimborso, ed è un'altra
+    // cosa. Lasciarlo passare libererebbe un vano con dentro la roba di un cliente che ha pagato.
+    $this->withHeader('Authorization', 'Bearer '.$token)
+        ->postJson("/api/v1/kiosk/sessions/{$sessione->id}/cancel")
+        ->assertStatus(422);
+
+    expect($sessione->refresh()->status)->toBe('active')
+        ->and($sessione->locker()->firstOrFail()->status)->toBe('occupied');
+});
