@@ -89,6 +89,7 @@ class TenantResource extends Resource
                     ->boolean()
                     ->getStateUsing(fn (Tenant $record): bool => $record->requiresMfa()),
             ])
+            ->recordUrl(fn (Tenant $record): string => self::getUrl('dettaglio', ['record' => $record]))
             ->recordActions([EditAction::make()]);
     }
 
@@ -97,6 +98,11 @@ class TenantResource extends Resource
         return [
             'index' => Pages\ListTenants::route('/'),
             'create' => Pages\CreateTenant::route('/create'),
+
+            // ⚠️ La domanda del supporto al telefono è *"cos'ha, questo cliente?"* — e la
+            // risposta non è un nome e uno slug: sono i suoi armadi e i suoi chioschi.
+            'dettaglio' => Pages\DettaglioTenant::route('/{record}'),
+
             'edit' => Pages\EditTenant::route('/{record}/edit'),
         ];
     }

@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Domain\Tenancy\TenantScope;
 use App\Domain\Tenancy\TenantScoped;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Carbon;
 
 /**
  * Sola lettura, dal punto di vista dell'applicazione.
@@ -19,6 +20,18 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $action
  * @property string $hash
  * @property string|null $prev_hash
+ * @property string $actor_type 'user' | 'device' | 'system' | 'webhook'
+ * @property string|null $actor_id
+ * @property string|null $actor_role
+ * @property string $result 'ok' | 'fail'
+ * @property string|null $error_code
+ * @property string|null $ip
+ * @property string|null $cabinet_id
+ * @property string|null $locker_id
+ * @property string|null $session_id
+ * @property string|null $command_id
+ * @property array<string, mixed> $context
+ * @property Carbon|null $created_at
  */
 class AuditLog extends Model implements TenantScoped
 {

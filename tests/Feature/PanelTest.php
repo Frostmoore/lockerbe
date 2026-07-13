@@ -2,9 +2,7 @@
 
 use App\Domain\Tenancy\Middleware\ResolveTenant;
 use App\Domain\Tenancy\TenantContext;
-use App\Filament\Resources\AuditLogResource;
 use App\Filament\Resources\CabinetResource\Pages\ListCabinets;
-use App\Filament\Resources\CommandResource;
 use App\Filament\Resources\LockerResource\Pages\ListLockers;
 use App\Filament\Resources\SessionResource;
 use App\Filament\Resources\TenantResource;
@@ -243,9 +241,11 @@ it('⚠️ non offre nessun modo di scrivere nel registro, nei comandi, nelle se
      * mancante diventa un'eccezione rumorosa, non un permesso silenzioso) e i dinieghi scritti
      * a mano nelle policy.
      */
-    expect(AuditLogResource::canCreate())->toBeFalse()
-        ->and(CommandResource::canCreate())->toBeFalse()
-        ->and(SessionResource::canCreate())->toBeFalse()
+    // ⚠️ Il registro e i comandi non sono piu' nemmeno delle *risorse*: il primo e' una pagina
+    // di sola lettura, i secondi vivono dentro l'armadio. Ma le policy restano — e sono loro la
+    // difesa: una risorsa la si puo' riaggiungere in un pomeriggio, una policy che dice `false`
+    // continua a dire `false`.
+    expect(SessionResource::canCreate())->toBeFalse()
         ->and($this->admin->can('create', AuditLog::class))->toBeFalse()
         ->and($this->admin->can('update', new AuditLog))->toBeFalse()
         ->and($this->admin->can('delete', new AuditLog))->toBeFalse()

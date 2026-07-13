@@ -5,10 +5,10 @@ namespace App\Providers\Filament;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfiedInPanel;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
 use App\Filament\Auth\Login;
+use App\Filament\Pages\Dashboard;
 use App\Filament\Pages\Mfa;
-use App\Filament\Resources\AuditLogResource;
+use App\Filament\Pages\Registro;
 use App\Filament\Resources\CabinetResource;
-use App\Filament\Resources\CommandResource;
 use App\Filament\Resources\DeviceResource;
 use App\Filament\Resources\LockerResource;
 use App\Filament\Resources\SessionResource;
@@ -18,7 +18,6 @@ use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
-use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -57,6 +56,10 @@ class AdminPanelProvider extends PanelProvider
             // username e lo sanno a memoria; l'email di servizio dell'account, spesso, no.
             ->login(Login::class)
 
+            // Serve perche' esista una PAGINA su cui atterrare col link di reset:
+            // mandare un link che non porta da nessuna parte non e' un reset.
+            ->passwordReset()
+
             /*
              * ⚠️⚠️ IL DEFAULT DI FILAMENT E' PERICOLOSO, E QUESTA RIGA LO SPEGNE.
              *
@@ -74,15 +77,13 @@ class AdminPanelProvider extends PanelProvider
              */
             ->strictAuthorization()
             ->colors(['primary' => Color::Amber])
-            ->pages([Dashboard::class, Mfa::class])
+            ->pages([Dashboard::class, Registro::class, Mfa::class])
             ->resources([
                 TenantResource::class,
                 CabinetResource::class,
                 LockerResource::class,
                 DeviceResource::class,
                 SessionResource::class,
-                CommandResource::class,
-                AuditLogResource::class,
                 UserResource::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')

@@ -142,7 +142,14 @@ class CabinetResource extends Resource
                     'maintenance' => 'Manutenzione',
                 ]),
             ])
+            ->recordUrl(fn (Cabinet $record): string => self::getUrl('nodi', ['record' => $record]))
             ->recordActions([
+                Action::make('nodi')
+                    ->label('Vani')
+                    ->icon(Heroicon::OutlinedSquares2x2)
+                    ->color('gray')
+                    ->url(fn (Cabinet $record): string => self::getUrl('nodi', ['record' => $record])),
+
                 EditAction::make(),
                 self::apriTuttiAction(),
             ]);
@@ -230,6 +237,12 @@ class CabinetResource extends Resource
         return [
             'index' => Pages\ListCabinets::route('/'),
             'create' => Pages\CreateCabinet::route('/create'),
+
+            // ⚠️ L'armadio visto come una macchina: il chiosco al centro, i vani attaccati, in
+            // tempo reale. È la pagina in cui si viene quando qualcosa non va — e dentro c'è
+            // anche lo storico degli ordini di apertura, che è l'unico posto in cui serve.
+            'nodi' => Pages\NodiCabinet::route('/{record}/nodi'),
+
             'edit' => Pages\EditCabinet::route('/{record}/edit'),
         ];
     }

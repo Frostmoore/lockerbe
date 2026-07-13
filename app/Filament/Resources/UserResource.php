@@ -2,13 +2,18 @@
 
 namespace App\Filament\Resources;
 
+use App\Domain\Audit\AuditLogger;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
+use Filament\Auth\Notifications\ResetPassword;
+use Filament\Facades\Filament;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
@@ -16,6 +21,7 @@ use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
 
 /**
  * GLI ACCOUNT — le persone che *gestiscono* il sistema.
@@ -116,9 +122,63 @@ class UserResource extends Resource
                     ->getStateUsing(fn (User $record): bool => $record->hasMfaEnabled()),
             ])
             ->recordActions([
+                self::resetPasswordAction(),
                 EditAction::make(),
                 DeleteAction::make(),
             ]);
+    }
+
+    /**
+     * ⚠️ MANDA IL LINK DI RESET PASSWORD.
+     *
+     * Non mostra la nuova password a schermo, e non la sceglie l'admin: gli manda un **link a
+     * tempo**, e la password se la sceglie lui. Un admin che digita la password di un altro è
+     * un admin che la conosce — e da quel momento nessuna riga dell'audit può più dire con
+     * certezza *chi* ha fatto una cosa con quell'account.
+     *
+     * ⚠️ **Oggi la mail finisce nel log** (`MAIL_MAILER=log`): non c'è ancora un provider di
+     * posta. Il link è vero e funziona; sta in `storage/logs/laravel.log`. Quando ci sarà un
+     * provider, **non cambia una riga di questo codice**: cambia una variabile d'ambiente.
+     *
+     * ⚠️ Usiamo la notifica di **Filament**, non quella di Laravel: quella di Laravel costruisce
+     * l'URL con `route('password.reset')`, che nei pannelli **non esiste**. Manderemmo un link
+     * rotto — cioè, dal punto di vista di chi lo riceve, nessun link.
+     */
+    public static function resetPasswordAction(): Action
+    {
+        return Action::make('resetPassword')
+            ->label('Manda reset password')
+            ->icon(Heroicon::OutlinedKey)
+            ->color('gray')
+            ->authorize(fn (User $record): bool => auth()->user()?->can('update', $record) ?? false)
+            ->requiresConfirmation()
+            ->modalHeading('Mandare il link di reset?')
+            ->modalDescription('Riceverà un link a tempo per scegliersi una nuova password. La password attuale resta valida finché non la cambia.')
+            ->action(function (User $record): void {
+                /** @var User $attore */
+                $attore = auth()->user();
+
+                Password::broker(Filament::getAuthPasswordBroker())->sendResetLink(
+                    ['email' => $record->email],
+                    function (User $utente, string $token): void {
+                        $notifica = app(ResetPassword::class, ['token' => $token]);
+                        $notifica->url = Filament::getResetPasswordUrl($token, $utente);
+
+                        $utente->notify($notifica);
+                    },
+                );
+
+                app(AuditLogger::class)->log('user.password_reset_sent', [
+                    'actor' => $attore,
+                    'context' => ['target' => $record->username ?? $record->email],
+                ]);
+
+                Notification::make()
+                    ->title('Link di reset mandato.')
+                    ->body('⚠️ Non c\'è ancora un provider di posta: la mail è finita in storage/logs/laravel.log.')
+                    ->success()
+                    ->send();
+            });
     }
 
     public static function getPages(): array
