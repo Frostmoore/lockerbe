@@ -423,7 +423,7 @@ function attendiPagamento() {
 
         if (r?.data?.status === 'active') {
             clearInterval(stato.pollPagamento);
-            log('pagamento confermato: identita' creata', 'l-in');
+            log('pagamento confermato: identità creata', 'l-in');
             stato.schermo = 'open';
             render();
         }
