@@ -6,35 +6,23 @@
     @php($online = $armadio->isOnline())
 
     {{-- ═══ IL NODO CHIOSCO: il FCV5003 avvitato in mezzo alla lamiera ═══ --}}
-    <div class="flex flex-col items-center">
-        <div @class([
-            'w-full max-w-md rounded-xl border-2 p-4 text-center',
-            'border-success-500 bg-success-50 dark:bg-success-400/10' => $online,
-            'border-gray-300 bg-gray-50 dark:border-white/10 dark:bg-white/5' => ! $online,
-        ])>
-            <div class="flex items-center justify-center gap-2">
-                <span @class([
-                    'h-3 w-3 rounded-full',
-                    'animate-pulse bg-success-500 shadow-[0_0_10px] shadow-success-500' => $online,
-                    'bg-gray-400' => ! $online,
-                ])></span>
-                <span class="font-semibold text-gray-950 dark:text-white">
-                    {{ $chiosco?->serial ?? 'nessun chiosco' }}
-                </span>
+    <div class="lk-hub">
+        <div @class(['lk-hub__box', 'lk-hub__box--online' => $online])>
+            <div class="lk-hub__seriale">
+                <span @class(['lk-dot', 'lk-dot--on' => $online])></span>
+                {{ $chiosco?->serial ?? 'nessun chiosco' }}
             </div>
 
-            <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            <p class="lk-hub__stato">
                 @if (! $chiosco)
                     {{-- ⚠️ Un armadio senza chiosco è lamiera: non apre niente. --}}
-                    Questo armadio non ha un chiosco: non può aprire niente.
+                    <b>Questo armadio non ha un chiosco.</b> Non può aprire niente.
                 @elseif ($online)
                     Ultimo battito {{ $armadio->last_seen_at?->diffForHumans() ?? '—' }}
                 @else
-                    {{-- ⚠️ Offline non è un dettaglio: nessun vano si aprirà, e ogni apertura
-                         risponderà 409. È la difesa contro il rischio #1, non un guasto. --}}
-                    <span class="font-medium text-danger-600 dark:text-danger-400">
-                        Non raggiungibile.
-                    </span>
+                    {{-- ⚠️ Offline non è un dettaglio: è la difesa contro il rischio #1 che fa il
+                         suo mestiere. Ogni apertura risponderà 409, e nessun comando verrà creato. --}}
+                    <b>Non raggiungibile.</b>
                     Nessun vano si aprirà finché non torna. Ultimo battito:
                     {{ $armadio->last_seen_at?->diffForHumans() ?? 'mai' }}
                 @endif
@@ -42,60 +30,54 @@
         </div>
 
         {{-- Il filo che scende dal chiosco ai vani: è un bus RS-485, non una metafora. --}}
-        <div @class([
-            'h-8 w-0.5',
-            'bg-success-500' => $online,
-            'bg-gray-300 dark:bg-white/10' => ! $online,
-        ])></div>
+        <div @class(['lk-bus', 'lk-bus--online' => $online])></div>
+        <div @class(['lk-bus__linea', 'lk-bus__linea--online' => $online])></div>
     </div>
 
     {{-- ═══ I NODI VANO ═══ --}}
-    <div class="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+    <div class="lk-vani">
         @foreach ($vani as $vano)
-            @php($stile = [
-                'free'           => ['b' => 'border-success-500', 'g' => 'bg-success-50 dark:bg-success-400/10', 't' => 'text-success-700 dark:text-success-400', 'l' => 'libero'],
-                'reserved'       => ['b' => 'border-warning-500', 'g' => 'bg-warning-50 dark:bg-warning-400/10', 't' => 'text-warning-700 dark:text-warning-400', 'l' => 'prenotato'],
-                'occupied'       => ['b' => 'border-info-500',    'g' => 'bg-info-50 dark:bg-info-400/10',       't' => 'text-info-700 dark:text-info-400',       'l' => 'occupato'],
-                'checkout'       => ['b' => 'border-warning-500', 'g' => 'bg-warning-50 dark:bg-warning-400/10', 't' => 'text-warning-700 dark:text-warning-400', 'l' => 'riconsegna'],
-                'out_of_service' => ['b' => 'border-danger-500',  'g' => 'bg-danger-50 dark:bg-danger-400/10',   't' => 'text-danger-700 dark:text-danger-400',   'l' => 'rotto'],
-            ][$vano->status] ?? ['b' => 'border-gray-300', 'g' => '', 't' => 'text-gray-500', 'l' => $vano->status])
+            @php($etichetta = [
+                'free' => 'libero',
+                'reserved' => 'prenotato',
+                'occupied' => 'occupato',
+                'checkout' => 'riconsegna',
+                'out_of_service' => 'rotto',
+            ][$vano->status] ?? $vano->status)
 
-            <div class="flex flex-col items-center">
-                {{-- il ramo che lo attacca al bus --}}
-                <div class="h-3 w-0.5 bg-gray-300 dark:bg-white/10"></div>
+            <div class="lk-vano">
+                <div class="lk-vano__ramo"></div>
 
-                <div @class(['w-full rounded-lg border-2 p-2 text-center', $stile['b'], $stile['g']])>
-                    <div class="text-xl font-bold text-gray-950 dark:text-white">{{ $vano->number }}</div>
-                    <div @class(['text-[11px] font-medium', $stile['t']])>{{ $stile['l'] }}</div>
+                <div class="lk-vano__box lk-vano__box--{{ $vano->status }}">
+                    <div class="lk-vano__numero">{{ $vano->number }}</div>
+                    <div class="lk-vano__stato">{{ $etichetta }}</div>
 
-                    {{-- La mappa fisica: quale scheda, quale canale. È ciò che il chiosco
-                         usa davvero per far scattare QUELLA serratura. --}}
-                    <div class="mt-0.5 font-mono text-[10px] text-gray-400">
-                        {{ $vano->board_address }}·{{ $vano->channel }}
-                    </div>
+                    {{-- La mappa fisica: quale scheda, quale canale. È ciò che il chiosco usa
+                         davvero per far scattare QUELLA serratura. --}}
+                    <div class="lk-vano__mappa">{{ $vano->board_address }}·{{ $vano->channel }}</div>
 
-                    <div class="mt-2 flex flex-col gap-1">
+                    <div class="lk-vano__azioni">
                         @if ($vano->status !== 'out_of_service')
                             <button type="button"
+                                    class="lk-btn lk-btn--apri"
                                     wire:click="apri('{{ $vano->id }}')"
-                                    wire:confirm="Aprire il vano {{ $vano->number }}? Lo sportello si apre davvero: se dentro c'è la roba di un cliente, resta accessibile."
-                                    class="rounded bg-warning-500 px-1.5 py-1 text-[11px] font-medium text-white hover:bg-warning-600">
+                                    wire:confirm="Aprire il vano {{ $vano->number }}? Lo sportello si apre davvero: se dentro c'è la roba di un cliente, resta accessibile.">
                                 Apri
                             </button>
                         @endif
 
                         @if ($vano->status === 'free')
                             <button type="button"
+                                    class="lk-btn lk-btn--guasto"
                                     wire:click="fuoriServizio('{{ $vano->id }}')"
-                                    wire:confirm="Mettere il vano {{ $vano->number }} fuori servizio? Smetterà di essere assegnato ai clienti."
-                                    class="rounded border border-danger-300 px-1.5 py-1 text-[11px] text-danger-600 hover:bg-danger-50 dark:border-danger-400/30 dark:text-danger-400 dark:hover:bg-danger-400/10">
+                                    wire:confirm="Mettere il vano {{ $vano->number }} fuori servizio? Smetterà di essere assegnato ai clienti.">
                                 Guasto
                             </button>
                         @elseif ($vano->status === 'out_of_service')
                             <button type="button"
+                                    class="lk-btn lk-btn--ripara"
                                     wire:click="rimettiInServizio('{{ $vano->id }}')"
-                                    wire:confirm="Rimettere in servizio il vano {{ $vano->number }}? Assicurati che sia VUOTO: da adesso torna assegnabile, e il prossimo cliente ci troverà quello che c'è rimasto."
-                                    class="rounded border border-success-300 px-1.5 py-1 text-[11px] text-success-600 hover:bg-success-50 dark:border-success-400/30 dark:text-success-400 dark:hover:bg-success-400/10">
+                                    wire:confirm="Rimettere in servizio il vano {{ $vano->number }}? Assicurati che sia VUOTO: da adesso torna assegnabile, e il prossimo cliente ci troverà quello che c'è rimasto.">
                                 Ripara
                             </button>
                         @endif
@@ -117,26 +99,28 @@
 
         @forelse ($this->comandi() as $comando)
             @php($esito = [
-                'acked'   => ['t' => 'text-success-600 dark:text-success-400', 'l' => 'eseguito'],
-                'sent'    => ['t' => 'text-info-600 dark:text-info-400',       'l' => 'consegnato'],
-                'pending' => ['t' => 'text-warning-600 dark:text-warning-400', 'l' => 'in coda'],
-                'expired' => ['t' => 'text-danger-600 dark:text-danger-400',   'l' => 'scaduto'],
-                'failed'  => ['t' => 'text-danger-600 dark:text-danger-400',   'l' => 'fallito'],
-            ][$comando->status] ?? ['t' => 'text-gray-500', 'l' => $comando->status])
+                'acked' => 'eseguito',
+                'sent' => 'consegnato',
+                'pending' => 'in coda',
+                'expired' => 'scaduto',
+                'failed' => 'fallito',
+            ][$comando->status] ?? $comando->status)
 
-            <div class="flex items-baseline gap-3 border-b border-gray-100 py-1.5 font-mono text-xs last:border-0 dark:border-white/5">
-                <span class="text-gray-400">{{ $comando->issued_at->format('d/m H:i:s') }}</span>
-                <span class="text-gray-950 dark:text-white">vano {{ $comando->locker?->number ?? '—' }}</span>
-                <span @class(['font-semibold', $esito['t']])>{{ $esito['l'] }}</span>
+            <div class="lk-cmd">
+                <span class="lk-cmd__ora">{{ $comando->issued_at->format('d/m H:i:s') }}</span>
+                <span class="lk-cmd__vano">vano {{ $comando->locker?->number ?? '—' }}</span>
+                <span class="lk-cmd__esito lk-cmd__esito--{{ $comando->status }}">{{ $esito }}</span>
 
-                @if ($comando->status === 'pending' && $comando->isExpired())
-                    {{-- ⚠️ `pending` a lungo non è "sta arrivando": è il segno che nessuno sta
-                         pubblicando. Quasi sempre vuol dire che `queue:work` non gira. --}}
-                    <span class="text-danger-500">scaduto in coda — nessuno lo ha pubblicato</span>
-                @endif
+                <span class="lk-cmd__nota">
+                    @if ($comando->status === 'pending' && $comando->isExpired())
+                        {{-- ⚠️ `pending` a lungo non è "sta arrivando": è il segno che nessuno sta
+                             pubblicando. Quasi sempre vuol dire che `queue:work` non gira. --}}
+                        scaduto in coda — nessuno lo ha pubblicato (queue:work non gira?)
+                    @endif
+                </span>
             </div>
         @empty
-            <p class="text-sm text-gray-500 dark:text-gray-400">Nessun ordine di apertura, ancora.</p>
+            <p class="lk-mono">Nessun ordine di apertura, ancora.</p>
         @endforelse
     </x-filament::section>
 </x-filament-panels::page>

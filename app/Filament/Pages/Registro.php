@@ -43,6 +43,19 @@ class Registro extends Page
 
     protected string $view = 'filament.pages.registro';
 
+    /**
+     * ⚠️ Le azioni che, da sole, possono svuotare un guardaroba o togliere di mezzo un chiosco.
+     * Nel log non devono somigliare alle altre: sono in rosso, in grassetto.
+     *
+     * @var list<string>
+     */
+    private const GRAVI = [
+        'cabinet.open_all',
+        'device.revoked',
+        'locker.error',
+        'auth.mfa.disabled',
+    ];
+
     /** Il testo cercato: azione, username, codice armadio, IP… */
     public string $cerca = '';
 
@@ -69,7 +82,7 @@ class Registro extends Page
     /**
      * Le righe, già tradotte in italiano.
      *
-     * @return Collection<int, array{quando: Carbon|null, ok: bool, azione: string, frase: string, chi: string, dove: string|null, errore: string|null, ip: string|null, contesto: string|null, hash: string}>
+     * @return Collection<int, array{quando: Carbon|null, ok: bool, azione: string, frase: string, grave: bool, chi: string, dove: string|null, errore: string|null, ip: string|null, contesto: array<string, string>, hash: string}>
      */
     public function righe(): Collection
     {
@@ -112,6 +125,10 @@ class Registro extends Page
             'ok' => $v->result === 'ok',
             'azione' => $v->action,
             'frase' => self::frase($v->action),
+
+            // ⚠️ Le azioni che possono svuotare un guardaroba non devono somigliare alle altre.
+            'grave' => in_array($v->action, self::GRAVI, true),
+
             'chi' => self::chi($v, $attori),
             'dove' => self::dove($v, $armadi, $vani),
             'errore' => $v->error_code,
@@ -132,11 +149,11 @@ class Registro extends Page
             'auth.mfa.confirm' => 'ha provato a confermare un codice MFA',
             'cabinet.created' => 'ha creato un armadio',
             'cabinet.updated' => 'ha modificato un armadio',
-            'cabinet.open_all' => '⚠️ HA APERTO TUTTI I VANI',
+            'cabinet.open_all' => 'HA APERTO TUTTI I VANI',
             'locker.open' => 'ha aperto un vano',
             'locker.opened' => 'il vano si è aperto',
             'locker.closed' => 'lo sportello è stato richiuso',
-            'locker.error' => '⚠️ la serratura non ha risposto',
+            'locker.error' => 'la serratura non ha risposto',
             'locker.out_of_service' => 'ha messo un vano fuori servizio',
             'locker.in_service' => 'ha rimesso un vano in servizio',
             'session.created' => 'un cliente ha preso un vano',
@@ -148,7 +165,7 @@ class Registro extends Page
             'device.registered' => 'ha registrato un chiosco',
             'device.attached' => 'ha legato un chiosco a un armadio',
             'device.activated' => 'ha attivato un chiosco',
-            'device.revoked' => '⚠️ ha revocato un chiosco',
+            'device.revoked' => 'ha revocato un chiosco',
             'device.credentials_collected' => 'un chiosco ha ritirato le sue credenziali',
             'user.password_reset_sent' => 'ha mandato un link di reset password',
             default => $azione,
@@ -197,25 +214,31 @@ class Registro extends Page
         return $pezzi === [] ? null : implode(' · ', $pezzi);
     }
 
-    /** Il contesto, appiattito: `chiave=valore`, senza le graffe del JSON. */
-    private static function contesto(AuditLog $v): ?string
+    /**
+     * Il contesto, appiattito in coppie `chiave => valore` gia' stringhe.
+     *
+     * ⚠️ Torna un ARRAY, non una stringa: la vista deve poter colorare la chiave e il valore in
+     * modo diverso. Una stringa gia' composta obbligherebbe la Blade a rispaccarla — e a quel
+     * punto la formattazione vivrebbe in due posti.
+     *
+     * @return array<string, string>
+     */
+    private static function contesto(AuditLog $v): array
     {
         $ctx = $v->context;
 
-        // Gli id li abbiamo già trasformati in "vano 3 · armadio MIO": ripeterli qui sarebbe
+        // Gli id li abbiamo gia' trasformati in "vano 3 · armadio G1": ripeterli qui sarebbe
         // esattamente il rumore che questa pagina esiste per togliere.
         unset($ctx['cabinet_id'], $ctx['locker_id']);
 
-        if ($ctx === []) {
-            return null;
-        }
-
-        $pezzi = [];
+        $pulito = [];
 
         foreach ($ctx as $chiave => $valore) {
-            $pezzi[] = $chiave.'='.(is_scalar($valore) ? (string) $valore : json_encode($valore));
+            $pulito[(string) $chiave] = is_scalar($valore)
+                ? (string) $valore
+                : (string) json_encode($valore);
         }
 
-        return implode(' ', $pezzi);
+        return $pulito;
     }
 }

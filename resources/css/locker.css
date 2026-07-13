@@ -1,0 +1,485 @@
+/*
+ * LO STILE DELLE NOSTRE PAGINE.
+ *
+ * ⚠️ Perche' un CSS a mano invece delle classi Tailwind.
+ *
+ * Filament spedisce un foglio di stile **gia' compilato**, che contiene soltanto le classi
+ * che usa lui. Le utility Tailwind scritte da noi (`grid`, `border-2`, `bg-success-50`…)
+ * non ci sono dentro — e il browser, semplicemente, le ignora: restano scritte nude
+ * impilate una sull'altra. Per averle bisognerebbe compilare un tema Filament con node.
+ *
+ * Qui il compromesso e' esplicito: **CSS vero, nessuna toolchain**. Le classi sono tutte
+ * prefissate `lk-` per non collidere con quelle di Filament.
+ *
+ * Registrato in AppServiceProvider (`FilamentAsset::register`) e copiato in `public/` da
+ * `php artisan filament:assets`.
+ */
+
+:root {
+    --lk-bg: #fff;
+    --lk-border: #e5e7eb;
+    --lk-text: #111827;
+    --lk-muted: #6b7280;
+    --lk-faint: #9ca3af;
+
+    --lk-ok: #059669;
+    --lk-ok-bg: #ecfdf5;
+    --lk-warn: #d97706;
+    --lk-warn-bg: #fffbeb;
+    --lk-bad: #dc2626;
+    --lk-bad-bg: #fef2f2;
+    --lk-info: #2563eb;
+    --lk-info-bg: #eff6ff;
+    --lk-off: #9ca3af;
+    --lk-off-bg: #f9fafb;
+}
+
+.dark {
+    --lk-bg: #111827;
+    --lk-border: rgba(255, 255, 255, 0.1);
+    --lk-text: #f9fafb;
+    --lk-muted: #9ca3af;
+    --lk-faint: #6b7280;
+
+    --lk-ok: #34d399;
+    --lk-ok-bg: rgba(52, 211, 153, 0.1);
+    --lk-warn: #fbbf24;
+    --lk-warn-bg: rgba(251, 191, 36, 0.1);
+    --lk-bad: #f87171;
+    --lk-bad-bg: rgba(248, 113, 113, 0.1);
+    --lk-info: #60a5fa;
+    --lk-info-bg: rgba(96, 165, 250, 0.1);
+    --lk-off: #6b7280;
+    --lk-off-bg: rgba(255, 255, 255, 0.03);
+}
+
+/* ═══════════════════════ LA HOME: I CARTELLINI ═══════════════════════ */
+
+.lk-locale {
+    margin-bottom: 2rem;
+}
+
+.lk-locale__titolo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--lk-text);
+}
+
+.lk-locale__conta {
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--lk-off-bg);
+    border: 1px solid var(--lk-border);
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--lk-muted);
+}
+
+.lk-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 1rem;
+}
+
+.lk-card {
+    display: block;
+    padding: 1rem;
+    border: 1px solid var(--lk-border);
+    border-left: 4px solid var(--lk-off);
+    border-radius: 0.75rem;
+    background: var(--lk-bg);
+    color: inherit;
+    text-decoration: none;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.lk-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* ⚠️ La barra colorata a sinistra e' la cosa che l'occhio trova per prima: verde = quel
+   guardaroba oggi apre, grigio = no. Tutto il resto e' dettaglio. */
+.lk-card--online { border-left-color: var(--lk-ok); }
+.lk-card--offline { border-left-color: var(--lk-off); }
+.lk-card--rotto { border-left-color: var(--lk-bad); }
+
+.lk-card__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.lk-card__codice {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--lk-text);
+}
+
+.lk-card__nome {
+    margin: 0.15rem 0 0;
+    font-size: 0.85rem;
+    color: var(--lk-muted);
+}
+
+.lk-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    background: var(--lk-off);
+}
+
+.lk-dot--on {
+    background: var(--lk-ok);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--lk-ok) 20%, transparent);
+    animation: lk-pulse 2s ease-in-out infinite;
+}
+
+@keyframes lk-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+
+.lk-badge {
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.lk-badge--ok { background: var(--lk-ok-bg); color: var(--lk-ok); }
+.lk-badge--warn { background: var(--lk-warn-bg); color: var(--lk-warn); }
+.lk-badge--bad { background: var(--lk-bad-bg); color: var(--lk-bad); }
+.lk-badge--off { background: var(--lk-off-bg); color: var(--lk-muted); }
+.lk-badge--info { background: var(--lk-info-bg); color: var(--lk-info); }
+
+/* La barra dei vani: si legge senza contare. */
+.lk-barra {
+    display: flex;
+    height: 8px;
+    margin-top: 0.9rem;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--lk-off-bg);
+}
+
+.lk-barra__pezzo--liberi { background: var(--lk-ok); }
+.lk-barra__pezzo--occupati { background: var(--lk-info); }
+.lk-barra__pezzo--rotti { background: var(--lk-bad); }
+
+.lk-legenda {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+}
+
+.lk-legenda__voce { display: flex; align-items: center; gap: 0.3rem; color: var(--lk-muted); }
+.lk-legenda__voce b { color: var(--lk-text); }
+.lk-legenda__quadro { width: 8px; height: 8px; border-radius: 2px; }
+
+.lk-card__piede {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid var(--lk-border);
+    font-size: 0.75rem;
+}
+
+.lk-mono {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    color: var(--lk-muted);
+}
+
+.lk-vuoto {
+    padding: 2.5rem;
+    border: 1px dashed var(--lk-border);
+    border-radius: 0.75rem;
+    text-align: center;
+    color: var(--lk-muted);
+}
+
+/* ═══════════════════════ LA VISTA A NODI ═══════════════════════ */
+
+.lk-hub {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.lk-hub__box {
+    width: 100%;
+    max-width: 30rem;
+    padding: 1rem 1.25rem;
+    border: 2px solid var(--lk-off);
+    border-radius: 0.75rem;
+    background: var(--lk-off-bg);
+    text-align: center;
+}
+
+.lk-hub__box--online {
+    border-color: var(--lk-ok);
+    background: var(--lk-ok-bg);
+}
+
+.lk-hub__seriale {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--lk-text);
+}
+
+.lk-hub__stato {
+    margin: 0.4rem 0 0;
+    font-size: 0.85rem;
+    color: var(--lk-muted);
+}
+
+.lk-hub__stato b { color: var(--lk-bad); }
+
+/* Il bus: e' un RS-485 vero, non una metafora. */
+.lk-bus {
+    width: 2px;
+    height: 1.75rem;
+    background: var(--lk-off);
+}
+
+.lk-bus--online { background: var(--lk-ok); }
+
+.lk-bus__linea {
+    height: 2px;
+    width: 100%;
+    max-width: 95%;
+    margin: 0 auto;
+    background: var(--lk-off);
+}
+
+.lk-bus__linea--online { background: var(--lk-ok); }
+
+.lk-vani {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 0.75rem;
+    margin-top: 0;
+}
+
+.lk-vano {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.lk-vano__ramo {
+    width: 2px;
+    height: 0.9rem;
+    background: var(--lk-border);
+}
+
+.lk-vano__box {
+    width: 100%;
+    padding: 0.6rem 0.5rem;
+    border: 2px solid var(--lk-off);
+    border-radius: 0.6rem;
+    background: var(--lk-off-bg);
+    text-align: center;
+}
+
+.lk-vano__box--free { border-color: var(--lk-ok); background: var(--lk-ok-bg); }
+.lk-vano__box--reserved,
+.lk-vano__box--checkout { border-color: var(--lk-warn); background: var(--lk-warn-bg); }
+.lk-vano__box--occupied { border-color: var(--lk-info); background: var(--lk-info-bg); }
+.lk-vano__box--out_of_service { border-color: var(--lk-bad); background: var(--lk-bad-bg); }
+
+.lk-vano__numero {
+    font-size: 1.6rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--lk-text);
+}
+
+.lk-vano__stato {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.lk-vano__box--free .lk-vano__stato { color: var(--lk-ok); }
+.lk-vano__box--reserved .lk-vano__stato,
+.lk-vano__box--checkout .lk-vano__stato { color: var(--lk-warn); }
+.lk-vano__box--occupied .lk-vano__stato { color: var(--lk-info); }
+.lk-vano__box--out_of_service .lk-vano__stato { color: var(--lk-bad); }
+
+/* La mappa fisica: quale scheda, quale canale. E' cio' che fa scattare QUELLA serratura. */
+.lk-vano__mappa {
+    margin-top: 0.15rem;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.65rem;
+    color: var(--lk-faint);
+}
+
+.lk-vano__azioni {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+}
+
+.lk-btn {
+    flex: 1;
+    padding: 0.25rem 0.3rem;
+    border: 1px solid transparent;
+    border-radius: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+}
+
+.lk-btn--apri { background: var(--lk-warn); color: #fff; }
+.lk-btn--apri:hover { filter: brightness(0.92); }
+.lk-btn--guasto { border-color: var(--lk-bad); color: var(--lk-bad); }
+.lk-btn--guasto:hover { background: var(--lk-bad-bg); }
+.lk-btn--ripara { border-color: var(--lk-ok); color: var(--lk-ok); }
+.lk-btn--ripara:hover { background: var(--lk-ok-bg); }
+
+/* Gli ordini di apertura, in fondo alla pagina dell'armadio. */
+.lk-cmd {
+    display: grid;
+    grid-template-columns: 9rem 5rem 7rem 1fr;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--lk-border);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 0.78rem;
+}
+
+.lk-cmd:last-child { border-bottom: 0; }
+.lk-cmd__ora { color: var(--lk-faint); }
+.lk-cmd__vano { color: var(--lk-text); }
+.lk-cmd__esito { font-weight: 700; }
+.lk-cmd__esito--acked { color: var(--lk-ok); }
+.lk-cmd__esito--sent { color: var(--lk-info); }
+.lk-cmd__esito--pending { color: var(--lk-warn); }
+.lk-cmd__esito--expired,
+.lk-cmd__esito--failed { color: var(--lk-bad); }
+.lk-cmd__nota { color: var(--lk-bad); }
+
+/* ═══════════════════════ IL REGISTRO ═══════════════════════ */
+
+.lk-log {
+    padding: 0.9rem 1rem;
+    border-radius: 0.75rem;
+    background: #0b0f19;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.65;
+    overflow-x: auto;
+}
+
+/* ⚠️ COLONNE ALLINEATE. Un log in cui i campi ballano da riga a riga non si scorre con
+   l'occhio: si legge una riga alla volta, cioe' non si legge. */
+.lk-log__riga {
+    display: grid;
+    grid-template-columns: 10.5rem 3.5rem 14rem 1fr;
+    gap: 0.75rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.25rem;
+    white-space: nowrap;
+}
+
+.lk-log__riga:hover { background: rgba(255, 255, 255, 0.05); }
+.lk-log__riga--fail { background: rgba(248, 113, 113, 0.07); }
+
+.lk-log__ora { color: #64748b; }
+
+.lk-log__esito { font-weight: 700; }
+.lk-log__esito--ok { color: #34d399; }
+.lk-log__esito--fail { color: #f87171; }
+
+.lk-log__chi { color: #fbbf24; overflow: hidden; text-overflow: ellipsis; }
+
+.lk-log__cosa { color: #93c5fd; }
+.lk-log__cosa--grave { color: #fca5a5; font-weight: 700; }
+
+.lk-log__dove { color: #c4b5fd; }
+.lk-log__errore { color: #f87171; }
+.lk-log__ctx { color: #94a3b8; }
+.lk-log__ctx b { color: #e2e8f0; font-weight: 600; }
+.lk-log__hash { color: #334155; }
+.lk-log__ip { color: #475569; }
+
+.lk-log__vuoto { padding: 2rem; text-align: center; color: #64748b; }
+
+.lk-filtri {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.lk-input {
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--lk-border);
+    border-radius: 0.5rem;
+    background: var(--lk-bg);
+    color: var(--lk-text);
+    font-size: 0.85rem;
+    min-width: 18rem;
+}
+
+.lk-select {
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--lk-border);
+    border-radius: 0.5rem;
+    background: var(--lk-bg);
+    color: var(--lk-text);
+    font-size: 0.85rem;
+}
+
+.lk-piede {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.85rem;
+    color: var(--lk-muted);
+}
+
+/* ═══════════════════════ IL DETTAGLIO DEL LOCALE ═══════════════════════ */
+
+.lk-riga {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.6rem 0.25rem;
+    border-bottom: 1px solid var(--lk-border);
+    color: inherit;
+    text-decoration: none;
+}
+
+.lk-riga:last-child { border-bottom: 0; }
+.lk-riga:hover { background: var(--lk-off-bg); }
+
+.lk-riga__codice { width: 10rem; flex: 0 0 auto; font-weight: 600; color: var(--lk-text); }
+.lk-riga__nome { flex: 1; min-width: 0; font-size: 0.85rem; color: var(--lk-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lk-riga__meta { flex: 0 0 auto; font-size: 0.85rem; color: var(--lk-muted); }

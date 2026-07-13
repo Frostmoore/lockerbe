@@ -9,35 +9,27 @@
         @forelse ($armadi as $armadio)
             @php($online = $armadio->isOnline())
 
-            <a href="{{ $this->urlNodi($armadio) }}"
-               class="flex items-center gap-4 border-b border-gray-100 py-3 last:border-0 hover:bg-gray-50 dark:border-white/5 dark:hover:bg-white/5">
+            <a class="lk-riga" href="{{ $this->urlNodi($armadio) }}">
+                <span @class(['lk-dot', 'lk-dot--on' => $online])></span>
 
-                <span @class([
-                    'h-2.5 w-2.5 shrink-0 rounded-full',
-                    'bg-success-500' => $online,
-                    'bg-gray-400' => ! $online,
-                ])></span>
+                <span class="lk-riga__codice">{{ $armadio->code }}</span>
+                <span class="lk-riga__nome">{{ $armadio->name }}</span>
 
-                <span class="w-40 shrink-0 font-medium text-gray-950 dark:text-white">{{ $armadio->code }}</span>
-                <span class="flex-1 truncate text-sm text-gray-500 dark:text-gray-400">{{ $armadio->name }}</span>
-
-                <span class="text-sm text-gray-500 dark:text-gray-400">
+                <span class="lk-riga__meta">
                     {{ $armadio->lockers_liberi_count }}/{{ $armadio->lockers_count }} liberi
                 </span>
 
                 @if ($armadio->lockers_rotti_count > 0)
-                    <span class="text-sm font-medium text-danger-600 dark:text-danger-400">
-                        {{ $armadio->lockers_rotti_count }} rotti
-                    </span>
+                    <span class="lk-badge lk-badge--bad">{{ $armadio->lockers_rotti_count }} rotti</span>
                 @endif
 
-                <span class="w-40 shrink-0 text-right font-mono text-xs text-gray-400">
-                    {{-- ⚠️ Un armadio senza chiosco è lamiera: non apre niente. --}}
+                {{-- ⚠️ Un armadio senza chiosco è lamiera: non apre niente. --}}
+                <span class="lk-riga__meta lk-mono">
                     {{ $armadio->device?->serial ?? 'nessun chiosco' }}
                 </span>
             </a>
         @empty
-            <p class="text-sm text-gray-500 dark:text-gray-400">Questo locale non ha ancora armadi.</p>
+            <p class="lk-riga__nome">Questo locale non ha ancora armadi.</p>
         @endforelse
     </x-filament::section>
 
@@ -47,32 +39,30 @@
 
         <x-slot name="description">
             ⚠️ Ci sono <strong>tutti</strong>, anche quelli registrati e non ancora legati a un armadio:
-            è proprio quello che il tecnico ha appena messo dentro e sta cercando.
+            è proprio quello che il tecnico ha appena montato e sta cercando.
         </x-slot>
 
         @forelse ($chioschi as $chiosco)
-            <div class="flex items-center gap-4 border-b border-gray-100 py-3 last:border-0 dark:border-white/5">
-                <span class="w-48 shrink-0 font-mono text-sm text-gray-950 dark:text-white">{{ $chiosco->serial }}</span>
+            <div class="lk-riga">
+                <span class="lk-riga__codice lk-mono">{{ $chiosco->serial }}</span>
 
                 <span @class([
-                    'w-40 shrink-0 text-sm font-medium',
-                    'text-success-600 dark:text-success-400' => $chiosco->status === 'active',
-                    'text-warning-600 dark:text-warning-400' => $chiosco->status === 'registered',
-                    'text-danger-600 dark:text-danger-400' => $chiosco->status === 'revoked',
+                    'lk-badge',
+                    'lk-badge--ok' => $chiosco->status === 'active',
+                    'lk-badge--warn' => $chiosco->status === 'registered',
+                    'lk-badge--bad' => $chiosco->status === 'revoked',
                 ])>
                     {{ ['registered' => 'mai attivato', 'active' => 'attivo', 'revoked' => 'revocato'][$chiosco->status] ?? $chiosco->status }}
                 </span>
 
-                <span class="flex-1 text-sm text-gray-500 dark:text-gray-400">
+                <span class="lk-riga__nome">
                     {{ $chiosco->cabinet?->code ?? '— non associato a nessun armadio —' }}
                 </span>
 
-                <span class="text-sm text-gray-400">
-                    {{ $chiosco->last_seen_at?->diffForHumans() ?? 'mai visto' }}
-                </span>
+                <span class="lk-riga__meta">{{ $chiosco->last_seen_at?->diffForHumans() ?? 'mai visto' }}</span>
             </div>
         @empty
-            <p class="text-sm text-gray-500 dark:text-gray-400">Questo locale non ha ancora chioschi.</p>
+            <p class="lk-riga__nome">Questo locale non ha ancora chioschi.</p>
         @endforelse
     </x-filament::section>
 </x-filament-panels::page>

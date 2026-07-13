@@ -75,8 +75,15 @@ it('mostra il chiosco e i vani dell\'armadio', function () {
     $this->actingAs($this->gestore)
         ->get("/app/cabinets/{$this->mio->id}/nodi")
         ->assertOk()
-        ->assertSee('FCV5003-0001')   // il nodo chiosco
-        ->assertSee('libero');        // il nodo vano
+        ->assertSee('FCV5003-0001')     // il nodo chiosco
+        ->assertSee('libero')           // il nodo vano
+        // ⚠️ E le classi ci sono davvero. Filament spedisce un CSS gia' compilato che contiene
+        // solo le SUE classi: le utility Tailwind scritte in una nostra Blade non esistono, e la
+        // pagina viene fuori come scritte nude impilate. Le nostre classi sono `lk-`, e stanno in
+        // un CSS vero (AppServiceProvider → FilamentAsset). Se questo test fallisce, la pagina e'
+        // di nuovo un elenco di parole.
+        ->assertSee('lk-vano__box')
+        ->assertSee('lk-hub__box');
 });
 
 it('⚠️ non lascia vedere la vista a nodi di un armadio altrui', function () {

@@ -11,6 +11,8 @@ use App\Domain\Payment\Providers\MockPaymentProvider;
 use App\Domain\Tenancy\TenantContext;
 use App\Mqtt\CommandPublisher;
 use App\Mqtt\NullCommandPublisher;
+use Filament\Support\Assets\Css;
+use Filament\Support\Facades\FilamentAsset;
 use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -80,6 +82,23 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        /*
+         * ⚠️ IL NOSTRO CSS, E PERCHE' NON SONO CLASSI TAILWIND.
+         *
+         * Filament spedisce un foglio di stile **gia' compilato**, che contiene soltanto le
+         * classi che usa lui. Le utility Tailwind scritte da noi in una Blade (`grid`,
+         * `border-2`, `bg-success-50`…) **non ci sono dentro**, e il browser le ignora: le
+         * nostre pagine venivano fuori come scritte nude impilate una sull'altra.
+         *
+         * Per avere Tailwind bisognerebbe compilare un tema Filament con node. Il compromesso
+         * scelto e' esplicito: **CSS vero, nessuna toolchain**. Classi prefissate `lk-`.
+         *
+         * ⚠️ Dopo averlo modificato: `php artisan filament:assets` (lo copia in `public/`).
+         */
+        FilamentAsset::register([
+            Css::make('locker', resource_path('css/locker.css')),
+        ]);
+
         $context = $this->app->make(TenantContext::class);
 
         // Le variabili di sessione Postgres vivono NELLA connessione: una connessione

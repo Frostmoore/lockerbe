@@ -28,13 +28,18 @@ class Dashboard extends BaseDashboard
 {
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedSquares2x2;
 
-    protected static ?string $navigationLabel = 'Armadi';
+    // ⚠️ NON "Armadi": si chiamava cosi' anche la risorsa, e nel menu comparivano due voci
+    // identiche che portavano in due posti diversi. Un menu ambiguo e' un menu che si smette
+    // di leggere.
+    protected static ?string $navigationLabel = 'Panoramica';
+
+    protected static ?int $navigationSort = -1;
 
     protected string $view = 'filament.pages.dashboard';
 
     public function getTitle(): string|Htmlable
     {
-        return 'Armadi';
+        return 'Panoramica';
     }
 
     /**
