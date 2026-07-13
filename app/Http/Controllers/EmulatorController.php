@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Domain\Device\Services\DeviceProvisioningService;
 use App\Domain\Mqtt\Topics;
+use App\Domain\Tenancy\TenantContext;
 use App\Models\Cabinet;
 use App\Models\Device;
 use App\Models\User;
 use App\Support\MockPanel;
 use Illuminate\Contracts\View\View;
+use Illuminate\Support\Collection;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
@@ -31,7 +33,39 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  */
 final class EmulatorController extends Controller
 {
-    public function __construct(private readonly DeviceProvisioningService $provisioning) {}
+    public function __construct(
+        private readonly DeviceProvisioningService $provisioning,
+        private readonly TenantContext $tenants,
+    ) {}
+
+    /**
+     * L'elenco degli armadi accesi.
+     *
+     * ⚠️ Esiste per un motivo banale e reale: nessuno sa a memoria l'uuid di un armadio. Senza
+     * questa pagina, per aprire l'emulatore bisognerebbe andare a pescare un id nel database —
+     * e uno strumento che si usa solo dopo una query non lo usa nessuno.
+     *
+     * Scavalca l'isolamento tra clienti (`runWithBypass`) perche' e' una pagina da banco di
+     * lavoro, non da esercizio: qui i clienti non esistono, esistono gli armadi accesi. Puo'
+     * farlo **solo** perche' e' dietro il doppio cancello.
+     */
+    public function index(): View
+    {
+        if (! MockPanel::enabled()) {
+            throw new NotFoundHttpException;
+        }
+
+        /** @var Collection<int, Cabinet> $armadi */
+        $armadi = $this->tenants->runWithBypass(
+            fn () => Cabinet::query()
+                ->has('device')
+                ->with(['device', 'tenant', 'lockers'])
+                ->orderBy('code')
+                ->get()
+        );
+
+        return view('emulator-index', ['cabinets' => $armadi]);
+    }
 
     public function show(Cabinet $cabinet): View
     {

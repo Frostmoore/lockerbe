@@ -17,4 +17,5 @@ Route::get('/', function () {
  * Doppio cancello (MockPanel): non esiste in produzione. La pagina riceve le credenziali MQTT
  * del chiosco dentro l'HTML.
  */
+Route::get('/emulator', [EmulatorController::class, 'index']);
 Route::get('/emulator/{cabinet}', [EmulatorController::class, 'show']);
