@@ -35,7 +35,9 @@ use Illuminate\Support\Carbon;
  * @property Carbon $reserved_until
  * @property Carbon|null $expires_at
  * @property Carbon|null $paid_at
+ * @property Carbon|null $checkout_pending_at
  * @property Carbon|null $closed_at
+ * @property string|null $closed_by
  * @property int $reopen_count
  * @property array<string, mixed> $meta
  */
@@ -48,6 +50,12 @@ class Session extends Model implements TenantScoped
         'cabinet_id', 'locker_id', 'status', 'amount_cents', 'currency',
         'payment_id', 'public_token_hash', 'reserved_until', 'expires_at', 'meta',
     ];
+
+    /** Riconsegna dichiarata dal cliente, non ancora confermata: il vano e' aperto ma resta suo. */
+    public function isCheckoutPending(): bool
+    {
+        return $this->checkout_pending_at !== null;
+    }
 
     /** Gli stati da cui la sessione puo' ancora muoversi. */
     public function isTerminal(): bool
@@ -96,6 +104,7 @@ class Session extends Model implements TenantScoped
             'reserved_until' => 'datetime',
             'expires_at' => 'datetime',
             'paid_at' => 'datetime',
+            'checkout_pending_at' => 'datetime',
             'closed_at' => 'datetime',
         ];
     }

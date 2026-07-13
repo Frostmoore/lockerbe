@@ -5,6 +5,7 @@ use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
 use App\Domain\Cabinet\Console\MarkOfflineCabinets;
 use App\Domain\Session\Console\CancelExpiredReservations;
 use App\Domain\Session\Console\CloseExpiredSessions;
+use App\Domain\Session\Console\FinalizePendingCheckouts;
 use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Domain\Session\Exceptions\NoLockerAvailableException;
 use App\Domain\Tenancy\Middleware\EstablishTenantContext;
@@ -35,6 +36,7 @@ return Application::configure(basePath: dirname(__DIR__))
         MarkOfflineCabinets::class,
         CancelExpiredReservations::class,
         CloseExpiredSessions::class,
+        FinalizePendingCheckouts::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // In testa a TUTTO: le policy RLS sono fail-closed, quindi senza contesto non si

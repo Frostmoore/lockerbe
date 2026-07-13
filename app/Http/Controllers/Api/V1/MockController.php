@@ -83,12 +83,28 @@ final class MockController
             'cabinet_id' => ['required', 'uuid'],
             'token' => ['required', 'string', 'min:4', 'max:128'],
             'locker_number' => ['nullable', 'integer'],
+
+            /*
+             * ⚠️ L'INTENZIONE SI DICHIARA PRIMA CHE IL VANO SI APRA.
+             *
+             * Al tap, il chiosco mostra due bottoni: "Riapri — torno dopo" e "Ho finito —
+             * riconsegna". Non e' un vezzo di interfaccia: quello e' l'ultimo istante in cui
+             * il cliente e' davanti allo schermo. Dopo aver ripreso il cappotto se ne va —
+             * sono le tre di notte — e nessun design che gli chieda di confermare *dopo*
+             * funzionera' mai nella realta'.
+             *
+             * Default `reopen`: se non sceglie e si allontana, il vano resta SUO. Un'azione
+             * ambigua non deve mai liberare un vano: liberarlo per sbaglio significa
+             * assegnarlo a un altro cliente con dentro la roba di qualcuno.
+             */
+            'intent' => ['nullable', 'in:reopen,checkout'],
         ]);
 
         $cabinet = Cabinet::query()->whereKey($data['cabinet_id'])->firstOrFail();
         $token = (string) $data['token'];
+        $intent = (string) ($data['intent'] ?? 'reopen');
 
-        // La carta e' gia' legata a una sessione attiva di questo armadio? Allora riapre.
+        // La carta e' gia' legata a una sessione attiva di questo armadio?
         $session = $this->identities->resolve($token, $cabinet);
 
         if ($session !== null) {
@@ -96,6 +112,20 @@ final class MockController
                 ->where('token_hash', Identity::hashToken($token))
                 ->firstOrFail();
 
+            if ($intent === 'checkout') {
+                // Il vano si apre e passa in `checkout`: aperto per il ritiro, ma ancora suo.
+                $commandId = $this->sessions->checkout($session);
+
+                return (new SessionResource($session->refresh()->load('locker')))
+                    ->additional([
+                        'action' => 'checkout_requested',
+                        'command_id' => $commandId,
+                        'grace_seconds' => (int) config('locker.checkout.grace'),
+                    ])
+                    ->response();
+            }
+
+            // Riapertura. ⚠️ Se era in corso una riconsegna, questo tap la ANNULLA.
             $commandId = $this->sessions->reopen($session, $identity);
 
             return (new SessionResource($session->refresh()->load('locker')))

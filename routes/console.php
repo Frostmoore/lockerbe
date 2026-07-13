@@ -25,3 +25,7 @@ Schedule::command('sessions:cancel-expired-reservations')->everyMinute();
 
 // Fine serata (nel fuso del locale, mai sul giorno solare — §7.4).
 Schedule::command('sessions:close-expired')->everyFiveMinutes();
+
+// ⚠️ Ripiego finche' D5 e' aperta: senza sensore di sportello, un vano riconsegnato non
+// tornerebbe MAI libero. Vedi FinalizePendingCheckouts per il compromesso che accettiamo.
+Schedule::command('sessions:finalize-checkouts')->everyMinute();

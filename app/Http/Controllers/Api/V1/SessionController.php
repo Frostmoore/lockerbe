@@ -101,13 +101,36 @@ final class SessionController
         return new SessionResource($session->load('locker', 'payment'));
     }
 
-    /** Checkout fatto dallo staff (il cliente e' al bancone). */
+    /**
+     * Riconsegna richiesta dallo staff (il cliente e' al bancone).
+     *
+     * ⚠️ Apre il vano ma NON lo libera: passa in `checkout` — aperto per il ritiro, ancora
+     * del cliente. Il sistema non puo' sapere se dentro c'e' ancora qualcosa, e liberarlo
+     * per sbaglio significherebbe assegnarlo a un altro con dentro la roba di qualcuno.
+     */
     public function checkout(Session $session): JsonResponse
     {
         $commandId = $this->sessions->checkout($session);
 
         return (new SessionResource($session->refresh()->load('locker')))
-            ->additional(['command_id' => $commandId])
+            ->additional([
+                'command_id' => $commandId,
+                'grace_seconds' => (int) config('locker.checkout.grace'),
+            ])
             ->response();
+    }
+
+    /**
+     * L'operatore ha guardato dentro: il vano e' vuoto. Ora si libera davvero.
+     *
+     * E' la conferma piu' affidabile che abbiamo finche' D5 resta aperta (non sappiamo se la
+     * scheda serrature sappia dire che lo sportello e' stato richiuso). Le altre due strade:
+     * il device (F5, se D5 lo permette) e la finestra di cortesia scaduta (ripiego).
+     */
+    public function confirmCheckout(Session $session): JsonResponse
+    {
+        $this->sessions->confirmCheckout($session, 'staff');
+
+        return (new SessionResource($session->refresh()->load('locker')))->response();
     }
 }

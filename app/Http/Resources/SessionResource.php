@@ -33,7 +33,15 @@ class SessionResource extends JsonResource
             'reserved_until' => $this->reserved_until->toIso8601String(),
             'expires_at' => $this->expires_at?->toIso8601String(),
             'paid_at' => $this->paid_at?->toIso8601String(),
+
+            // Riconsegna dichiarata ma non ancora confermata: il vano e' aperto e resta del
+            // cliente. Il pannello lo usa per mostrare "in riconsegna" e offrire allo staff
+            // il bottone di conferma.
+            'checkout_pending_at' => $this->checkout_pending_at?->toIso8601String(),
+            'checkout_pending' => $this->isCheckoutPending(),
+
             'closed_at' => $this->closed_at?->toIso8601String(),
+            'closed_by' => $this->closed_by,
             'payment' => new PaymentResource($this->whenLoaded('payment')),
             'created_at' => $this->created_at?->toIso8601String(),
         ];

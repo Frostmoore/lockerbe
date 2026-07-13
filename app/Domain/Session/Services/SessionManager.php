@@ -179,10 +179,22 @@ final class SessionManager
         }
 
         return DB::transaction(function () use ($session, $identity): string {
+            // ⚠️ Se era in corso una riconsegna, riaprire la ANNULLA: il cliente si e'
+            // accorto di aver dimenticato qualcosa nella tasca del cappotto. Il vano torna
+            // suo, come se non avesse mai premuto "ho finito".
+            $riconsegnaAnnullata = $session->checkout_pending_at !== null;
+
             $session->increment('reopen_count');
 
+            if ($riconsegnaAnnullata) {
+                $session->forceFill(['checkout_pending_at' => null])->save();
+            }
+
             $locker = $session->locker()->firstOrFail();
-            $locker->update(['last_opened_at' => now()]);
+            $locker->update([
+                'status' => 'occupied',       // torna occupato anche se era in `checkout`
+                'last_opened_at' => now(),
+            ]);
 
             $identity->forceFill(['last_used_at' => now()])->save();
 
@@ -193,7 +205,11 @@ final class SessionManager
                 'locker_id' => $locker->id,
                 'session_id' => $session->id,
                 'command_id' => $commandId,
-                'context' => ['reopen_count' => $session->reopen_count, 'identity_type' => $identity->type],
+                'context' => [
+                    'reopen_count' => $session->reopen_count,
+                    'identity_type' => $identity->type,
+                    'riconsegna_annullata' => $riconsegnaAnnullata,
+                ],
             ]);
 
             return $commandId;
@@ -201,9 +217,24 @@ final class SessionManager
     }
 
     /**
-     * `active` --checkout--> `closed`. Il cliente si riprende la roba e libera il vano.
+     * `active` --checkout--> `active` + riconsegna in corso (vano `checkout`).
      *
-     * Comando **open(checkout)**, poi il vano torna `free` e puo' essere riassegnato.
+     * ⚠️ IL VANO NON DIVENTA LIBERO QUI, e questo e' il cuore del problema.
+     *
+     * Il sistema **non puo' sapere se il vano e' vuoto**: sa (forse, dipende da D5) se lo
+     * sportello e' chiuso, non se dentro c'e' ancora un cappotto. E liberare un vano per
+     * sbaglio significa assegnarlo a un altro cliente **con dentro la roba di qualcuno** —
+     * il danno peggiore possibile. Tenerlo occupato per sbaglio costa qualche euro di
+     * rotazione, e lo staff lo recupera in trenta secondi.
+     *
+     * Quindi: il vano si apre, entra in stato `checkout` ("aperto per il ritiro, non ancora
+     * riassegnabile") e resta del cliente. Diventa `free` solo con una **conferma esplicita**
+     * (`confirmCheckout`): sportello richiuso, finestra di cortesia scaduta, o operatore.
+     *
+     * La sessione resta `active` di proposito: se il cliente si accorge di aver dimenticato
+     * il telefono nella tasca del cappotto e ripassa la carta, `reopen()` **annulla la
+     * riconsegna** e tutto torna com'era. Costa niente, e salva la situazione piu'
+     * imbarazzante possibile.
      */
     public function checkout(Session $session): string
     {
@@ -216,30 +247,85 @@ final class SessionManager
 
             $commandId = $this->commands->issueOpen($locker, 'checkout');
 
-            $session->forceFill(['status' => 'closed', 'closed_at' => now()])->save();
+            $session->forceFill(['checkout_pending_at' => now()])->save();
 
-            // free, non `checkout`: lo stato intermedio del piano §7.2 serve a distinguere
-            // "aperto per il ritiro" da "gia' riassegnabile", e diventa osservabile solo in
-            // F5, quando il device confermera' la chiusura fisica dello sportello. Finche'
-            // l'ack non esiste, tenere il vano in `checkout` significherebbe non renderlo
-            // mai piu' assegnabile.
-            $locker->update([
-                'status' => 'free',
-                'current_session_id' => null,
-                'last_opened_at' => now(),
-            ]);
+            $locker->update(['status' => 'checkout', 'last_opened_at' => now()]);
 
-            $this->audit->log('session.checkout', [
+            $this->audit->log('session.checkout_requested', [
                 'cabinet_id' => $session->cabinet_id,
                 'locker_id' => $locker->id,
                 'session_id' => $session->id,
                 'command_id' => $commandId,
             ]);
 
-            SessionClosed::dispatch($session);
-
             return $commandId;
         });
+    }
+
+    /**
+     * Chiude davvero la riconsegna: sessione `closed`, vano `free` e riassegnabile.
+     *
+     * Le tre strade che portano qui, in ordine di affidabilita':
+     *
+     *   `device`  lo sportello e' stato **richiuso** — la conferma vera. Richiede che la
+     *             scheda serrature sappia leggere lo stato dello sportello (⚠️ **D5**,
+     *             ancora ignota: serve il datasheet della VF203_V12). Arrivera' in F5.
+     *   `timeout` la finestra di cortesia e' scaduta (`locker.checkout.grace`). E' il
+     *             ripiego finche' D5 non e' sbloccata: imperfetto ma necessario, altrimenti
+     *             senza sensore nessun vano tornerebbe mai libero.
+     *   `staff`   un operatore ha guardato dentro e ha confermato.
+     */
+    public function confirmCheckout(Session $session, string $closedBy): void
+    {
+        if ($session->checkout_pending_at === null) {
+            throw new IllegalTransitionException($session->status, 'checkout.confirm');
+        }
+
+        DB::transaction(function () use ($session, $closedBy): void {
+            $session->forceFill([
+                'status' => 'closed',
+                'closed_at' => now(),
+                'closed_by' => $closedBy,
+                'checkout_pending_at' => null,
+            ])->save();
+
+            $this->releaseLocker($session);
+
+            $this->audit->log('session.checkout', [
+                'cabinet_id' => $session->cabinet_id,
+                'locker_id' => $session->locker_id,
+                'session_id' => $session->id,
+                'context' => ['closed_by' => $closedBy],
+            ]);
+
+            SessionClosed::dispatch($session);
+        });
+    }
+
+    /**
+     * Finestra di cortesia scaduta ⇒ si chiudono le riconsegne rimaste in sospeso.
+     *
+     * ⚠️ Ripiego, non soluzione. La conferma giusta e' lo sportello richiuso, ma finche' D5
+     * e' aperta non sappiamo se la scheda serrature sappia dirlo. Senza questo timer, con un
+     * device muto, nessun vano tornerebbe **mai** libero dopo una riconsegna.
+     *
+     * @return int quante riconsegne sono state chiuse
+     */
+    public function finalizePendingCheckouts(): int
+    {
+        $grace = (int) config('locker.checkout.grace');
+
+        $pending = Session::query()
+            ->where('status', 'active')
+            ->whereNotNull('checkout_pending_at')
+            ->where('checkout_pending_at', '<', now()->subSeconds($grace))
+            ->get();
+
+        foreach ($pending as $session) {
+            $this->confirmCheckout($session, 'timeout');
+        }
+
+        return $pending->count();
     }
 
     /**
@@ -294,7 +380,12 @@ final class SessionManager
 
         foreach ($expired as $session) {
             DB::transaction(function () use ($session): void {
-                $session->forceFill(['status' => 'closed', 'closed_at' => now()])->save();
+                $session->forceFill([
+                    'status' => 'closed',
+                    'closed_at' => now(),
+                    'closed_by' => 'expiry',
+                    'checkout_pending_at' => null,
+                ])->save();
 
                 $this->audit->log('session.expired', [
                     'cabinet_id' => $session->cabinet_id,

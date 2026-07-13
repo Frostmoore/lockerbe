@@ -56,6 +56,25 @@ return [
     ],
 
     /*
+     * Finestra di cortesia della RICONSEGNA.
+     *
+     * Il cliente ha dichiarato "ho finito", il vano si e' aperto, ma il sistema non puo'
+     * sapere se l'ha davvero svuotato. La conferma giusta e' lo sportello richiuso — ma
+     * dipende da D5 (la scheda serrature sa leggerlo?), ancora aperta. Finche' non lo
+     * sappiamo, il vano torna libero allo scadere di questa finestra.
+     *
+     * ⚠️ E' un ripiego, non una soluzione: senza sensore, un cliente che lascia lo sportello
+     * aperto produce un vano dichiarato libero e fisicamente spalancato. Quando D5 si
+     * sbloccera', la conferma arrivera' dal device e questo timer diventera' solo una rete
+     * di sicurezza.
+     *
+     * Dentro la finestra, un nuovo tap della carta ANNULLA la riconsegna.
+     */
+    'checkout' => [
+        'grace' => (int) env('LOCKER_CHECKOUT_GRACE', 120),          // secondi
+    ],
+
+    /*
      * Oltre questa soglia senza heartbeat, il cabinet e' `offline` (§15) e non
      * accetta comandi.
      */

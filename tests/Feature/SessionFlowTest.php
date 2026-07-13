@@ -81,15 +81,103 @@ it('percorre tutto il flusso: chiedi vano → paga → riapri → checkout', fun
     // 5. Il cliente riapre anche dal telefono, col token pubblico. Nessun account.
     $this->postJson("/api/v1/public/sessions/{$publicToken}/reopen")->assertOk();
 
-    // 6. Checkout dal telefono: la sessione si chiude e il vano torna LIBERO.
-    $this->postJson("/api/v1/public/sessions/{$publicToken}/checkout")
-        ->assertOk()
-        ->assertJsonPath('data.status', 'closed');
+    // 6. 🏁 Riconsegna: il vano si apre, ma NON diventa libero. Resta suo.
+    $this->postJson("/api/v1/public/sessions/{$publicToken}/checkout")->assertOk();
 
     $locker = Locker::query()->where('number', 1)->firstOrFail();
 
+    // ⚠️ Il sistema non puo' sapere se il vano e' vuoto. Liberarlo adesso significherebbe
+    // poterlo assegnare a un altro cliente con dentro la roba di qualcuno.
+    expect($locker->status)->toBe('checkout')
+        ->and(Session::query()->findOrFail($sessionId)->status)->toBe('active')
+        ->and(Session::query()->findOrFail($sessionId)->checkout_pending_at)->not->toBeNull();
+
+    // 7. Lo staff guarda dentro e conferma: ORA il vano torna libero.
+    $this->actingAs($this->staff)
+        ->postJson("/api/v1/sessions/{$sessionId}/checkout/confirm")
+        ->assertOk()
+        ->assertJsonPath('data.status', 'closed')
+        ->assertJsonPath('data.closed_by', 'staff');
+
+    $locker->refresh();
+
     expect($locker->status)->toBe('free')
         ->and($locker->current_session_id)->toBeNull();
+});
+
+it('annulla la riconsegna se il cliente ripassa la carta', function () {
+    $created = $this->actingAs($this->staff)
+        ->postJson('/api/v1/sessions', ['cabinet_id' => $this->cabinet->id]);
+
+    $sessionId = $created->json('data.id');
+
+    $this->actingAs($this->staff)->postJson("/api/v1/mock/payments/{$created->json('payment.id')}/confirm");
+
+    $this->actingAs($this->staff)->postJson('/api/v1/mock/identity/tap', [
+        'cabinet_id' => $this->cabinet->id, 'token' => 'CARTA-Z',
+    ])->assertCreated();
+
+    // 🏁 "Ho finito": il vano si apre in riconsegna.
+    $this->actingAs($this->staff)->postJson('/api/v1/mock/identity/tap', [
+        'cabinet_id' => $this->cabinet->id, 'token' => 'CARTA-Z', 'intent' => 'checkout',
+    ])->assertOk()->assertJsonPath('action', 'checkout_requested');
+
+    expect(Locker::query()->where('number', 1)->firstOrFail()->status)->toBe('checkout');
+
+    // ⚠️ ...ma ha dimenticato il telefono nella tasca del cappotto. Ripassa la carta.
+    $this->actingAs($this->staff)->postJson('/api/v1/mock/identity/tap', [
+        'cabinet_id' => $this->cabinet->id, 'token' => 'CARTA-Z',
+    ])->assertOk()->assertJsonPath('action', 'reopen');
+
+    // La riconsegna e' annullata: tutto com'era, come se non avesse mai premuto "ho finito".
+    $session = Session::query()->findOrFail($sessionId);
+
+    expect($session->status)->toBe('active')
+        ->and($session->checkout_pending_at)->toBeNull()
+        ->and(Locker::query()->where('number', 1)->firstOrFail()->status)->toBe('occupied');
+});
+
+it('libera il vano allo scadere della finestra di cortesia', function () {
+    $created = $this->actingAs($this->staff)
+        ->postJson('/api/v1/sessions', ['cabinet_id' => $this->cabinet->id]);
+
+    $sessionId = $created->json('data.id');
+    $this->actingAs($this->staff)->postJson("/api/v1/mock/payments/{$created->json('payment.id')}/confirm");
+    $this->actingAs($this->staff)->postJson("/api/v1/sessions/{$sessionId}/checkout")->assertOk();
+
+    // Finestra ancora aperta: il vano e' ancora suo.
+    $this->artisan('sessions:finalize-checkouts')->assertSuccessful();
+    expect(Locker::query()->where('number', 1)->firstOrFail()->status)->toBe('checkout');
+
+    // Finestra scaduta. ⚠️ E' un ripiego, non una soluzione: la conferma giusta e' lo
+    // sportello richiuso (D5). Ma senza sensore, altrimenti nessun vano tornerebbe MAI
+    // libero dopo una riconsegna.
+    Session::query()->whereKey($sessionId)->update([
+        'checkout_pending_at' => now()->subSeconds((int) config('locker.checkout.grace') + 10),
+    ]);
+
+    $this->artisan('sessions:finalize-checkouts')->assertSuccessful();
+
+    $session = Session::query()->findOrFail($sessionId);
+
+    expect($session->status)->toBe('closed')
+        ->and($session->closed_by)->toBe('timeout')
+        ->and(Locker::query()->where('number', 1)->firstOrFail()->status)->toBe('free');
+});
+
+it('non riassegna un vano in riconsegna', function () {
+    $created = $this->actingAs($this->staff)
+        ->postJson('/api/v1/sessions', ['cabinet_id' => $this->cabinet->id]);
+
+    $this->actingAs($this->staff)->postJson("/api/v1/mock/payments/{$created->json('payment.id')}/confirm");
+    $this->actingAs($this->staff)->postJson("/api/v1/sessions/{$created->json('data.id')}/checkout");
+
+    // ⚠️ Il vano 1 e' aperto per il ritiro ma potrebbe avere ancora dentro il cappotto: il
+    // prossimo cliente NON deve riceverlo.
+    $altro = $this->actingAs($this->staff)
+        ->postJson('/api/v1/sessions', ['cabinet_id' => $this->cabinet->id]);
+
+    expect($altro->json('data.locker.number'))->toBe(2);
 });
 
 it('e\' idempotente sul pagamento: doppio click ⇒ UNA sola apertura', function () {

@@ -73,6 +73,11 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
         Route::get('sessions/{session}', [SessionController::class, 'show'])->middleware('can:session.view');
         Route::post('sessions/{session}/checkout', [SessionController::class, 'checkout'])
             ->middleware('can:session.checkout');
+
+        // ⚠️ La conferma che il vano e' VUOTO. Solo dopo questa (o dopo lo sportello
+        // richiuso, o allo scadere della finestra) il vano torna assegnabile.
+        Route::post('sessions/{session}/checkout/confirm', [SessionController::class, 'confirmCheckout'])
+            ->middleware('can:session.checkout');
     });
 });
 
