@@ -30,6 +30,8 @@ use Illuminate\Support\Carbon;
  * @property string $status
  * @property int $amount_cents
  * @property string $currency
+ * @property string $payment_method 'qr' | 'nfc'
+ * @property string|null $customer_email
  * @property string|null $payment_id
  * @property string|null $public_token_hash
  * @property Carbon $reserved_until
@@ -48,6 +50,10 @@ class Session extends Model implements TenantScoped
 
     protected $fillable = [
         'cabinet_id', 'locker_id', 'status', 'amount_cents', 'currency',
+        // ⚠️ Come ha pagato decide TUTTO il flusso di identita': QR ⇒ codice a 6 cifre per
+        // email, NFC ⇒ token di carta dal provider. Dimenticarlo qui significa che il metodo
+        // scelto dal cliente viene scartato in silenzio da Eloquent, e tutti tornano a 'qr'.
+        'payment_method', 'customer_email',
         'payment_id', 'public_token_hash', 'reserved_until', 'expires_at', 'meta',
     ];
 

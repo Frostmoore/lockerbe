@@ -5,12 +5,15 @@ namespace App\Mqtt;
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Command\Services\CommandIssuer;
 use App\Domain\Identity\Contracts\IdentityProvider;
+use App\Domain\Payment\Contracts\PaymentProvider;
 use App\Domain\Session\Services\SessionManager;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Cabinet;
 use App\Models\Command;
 use App\Models\Identity;
+use App\Models\Payment;
 use App\Models\Session;
+use Illuminate\Support\Facades\RateLimiter;
 
 /**
  * Cio' che il device racconta al server (piano §9).
@@ -23,11 +26,22 @@ use App\Models\Session;
  */
 final class DeviceEventHandler
 {
+    /**
+     * ⚠️ Quanti tentativi di identificazione sbagliati, per armadio, prima di chiudere.
+     *
+     * Sei cifre sono un milione di combinazioni: da sole sarebbero poche. Con 5 tentativi ogni
+     * 10 minuti, provarle tutte richiederebbe piu' di trent'anni davanti a quella lamiera.
+     */
+    private const MAX_TENTATIVI = 5;
+
+    private const FINESTRA_TENTATIVI = 600;
+
     public function __construct(
         private readonly TenantContext $context,
         private readonly CommandIssuer $commands,
         private readonly SessionManager $sessions,
         private readonly IdentityProvider $identities,
+        private readonly PaymentProvider $payments,
         private readonly AuditLogger $audit,
     ) {}
 
@@ -44,6 +58,10 @@ final class DeviceEventHandler
                 'cmd.ack' => $this->commandAck($payload),
                 'locker.opened', 'locker.closed', 'locker.error' => $this->lockerEvent($cabinet, $tipo, $payload),
                 'identity.presented' => $this->identityPresented($cabinet, $payload),
+
+                // 💳 Il cliente ha pagato con la carta, al chiosco. ⚠️ A confermare i soldi e' il
+                // PROVIDER, non il device: vedi cardPayment().
+                'payment.card' => $this->cardPayment($cabinet, $payload),
                 default => $this->audit->log('device.event_unknown', [
                     'cabinet_id' => $cabinet->id,
                     'actor_type' => 'device',
@@ -149,11 +167,18 @@ final class DeviceEventHandler
     }
 
     /**
-     * 🪪 Il cliente ha presentato la carta.
+     * 🪪 IL CLIENTE SI IDENTIFICA — con la carta, o digitando il codice ricevuto per email.
      *
-     * ⚠️ **Stessa code-path del bottone mock.** Cambia solo chi produce il token: la' un
-     * bottone, qui il lettore NFC del FCV5003. Se funziona col mock e non con la carta vera, il
-     * bug e' nel lettore — non nel dominio.
+     * ⚠️ **Qui non si lega piu' niente.** L'identita' nasce DAL PAGAMENTO (`IdentityIssuer`).
+     *
+     * Prima, davanti a un token sconosciuto, questo metodo lo legava "alla sessione attiva piu'
+     * recente dell'armadio". Era il rattoppo di un buco piu' grande — chi pagava col QR non
+     * riceveva **nessuna** identita' — ed era **peggio del buco**: con due clienti che
+     * depositano di fila, la carta del primo apriva il vano del secondo.
+     *
+     * Chi arriva qui ha gia' un'identita', creata quando ha pagato: il **codice a 6 cifre**
+     * mandato per email, o il **token della carta** restituito dal provider. Il chiosco non
+     * distingue: manda una stringa, e il server sa a chi appartiene.
      *
      * @param  array<string, mixed>  $payload
      */
@@ -167,23 +192,23 @@ final class DeviceEventHandler
         }
 
         /*
-         * ⚠️ IL DEPOSITO: e' QUI che la carta diventa lo scontrino.
+         * ⚠️ TROPPI TENTATIVI SBAGLIATI SU QUESTO ARMADIO.
          *
-         * Prima non era cosi', ed e' il bug che si vedeva dal chiosco: il cliente pagava col
-         * QR e **non gli veniva mai chiesta la carta**. Quando poi premeva "ho finito", la
-         * carta risultava sconosciuta e non succedeva niente — il vano restava occupato, e dal
-         * suo punto di vista il sistema era rotto.
+         * Sei cifre sono un milione di combinazioni: **da sole sarebbero poche**. Senza un
+         * freno, un pomeriggio di tentativi automatici le prova tutte, e il codice smette di
+         * essere una chiave.
          *
-         * Il rattoppo di allora era peggio del buco: la carta sconosciuta veniva legata "alla
-         * sessione attiva piu' recente dell'armadio". Con due clienti che depositano di fila,
-         * **la carta del primo apriva il vano del secondo**.
-         *
-         * Ora la carta si presenta al deposito, e il chiosco dice **a quale sessione** —
-         * quella che sta servendo in questo istante, davanti a quella persona. Nessuna
-         * indovinata.
+         * Il freno vive **per armadio**, perche' e' li' che l'attacco avviene: davanti a quella
+         * lamiera, con quel touchscreen. E si somma alle altre due difese: il codice vale solo
+         * per QUELL'armadio, e solo finche' la sessione e' viva.
          */
-        if ($intent === 'store') {
-            $this->legaCarta($cabinet, $token, $payload['session_id'] ?? null);
+        if (RateLimiter::tooManyAttempts(self::chiaveTentativi($cabinet), self::MAX_TENTATIVI)) {
+            $this->audit->log('identity.throttled', [
+                'cabinet_id' => $cabinet->id,
+                'actor_type' => 'device',
+                'result' => 'fail',
+                'error_code' => 'too_many_attempts',
+            ]);
 
             return;
         }
@@ -191,22 +216,27 @@ final class DeviceEventHandler
         $session = $this->identities->resolve($token, $cabinet);
 
         if (! $session instanceof Session) {
-            // ⚠️ Carta sconosciuta ⇒ **non si apre niente**. E' l'asimmetria (§7.0): davanti a
-            // un dubbio, un vano non si tocca. Finisce nel registro, perche' e' esattamente
+            RateLimiter::hit(self::chiaveTentativi($cabinet), self::FINESTRA_TENTATIVI);
+
+            // ⚠️ Identita' sconosciuta ⇒ **non si apre niente**. E' l'asimmetria (§7.0): davanti
+            // a un dubbio, un vano non si tocca. Finisce nel registro, perche' e' esattamente
             // cio' che vede il cliente a cui "non succede nulla".
             $this->audit->log('identity.unmatched', [
                 'cabinet_id' => $cabinet->id,
                 'actor_type' => 'device',
                 'result' => 'fail',
-                'error_code' => 'no_session_for_card',
+                'error_code' => 'unknown_identity',
                 'context' => ['intent' => $intent],
             ]);
 
             return;
         }
 
-        // ⚠️ L'intento e' stato dichiarato **prima** di passare la carta (§7.1), e non si perde
-        // per strada: "ho finito" vuol dire finito.
+        // Identita' giusta: il contatore dei tentativi si azzera.
+        RateLimiter::clear(self::chiaveTentativi($cabinet));
+
+        // ⚠️ L'intento e' stato dichiarato **prima** di identificarsi (§7.1), e non si perde per
+        // strada: "ho finito" vuol dire finito.
         if ($intent === 'checkout') {
             $this->sessions->checkout($session);
 
@@ -223,45 +253,61 @@ final class DeviceEventHandler
     }
 
     /**
-     * Lega la carta alla sessione che il chiosco sta servendo **adesso**.
+     * 💳 IL CLIENTE HA PAGATO CON LA CARTA, al chiosco.
      *
-     * ⚠️ La sessione la dice il chiosco (`session_id`): e' lui che, un istante fa, ha mostrato
-     * il QR a quella persona. Farla indovinare al server ("la piu' recente…") e' esattamente
-     * cio' che permetteva alla carta di un cliente di aprire il vano di un altro.
+     * ⚠️⚠️ **A dire che i soldi sono arrivati e' il PROVIDER, non il device.** Il chiosco
+     * presenta la carta; il token e l'esito escono da `PaymentProvider::handleCardPayment()`.
+     * Se bastasse la parola del chiosco, un chiosco compromesso potrebbe dichiarare "questa
+     * carta ha pagato" e regalarsi tutti i vani dell'armadio.
      *
-     * ⚠️ E la sessione deve essere **di questo armadio** e **senza carta**: un chiosco
-     * compromesso che indicasse una sessione altrui si legherebbe il vano di un altro locale.
-     * L'id arriva dalla rete — non ci si fida, si verifica.
+     * ⚠️ Il `card_token` finisce nel payload del pagamento, ed e' da li' che `IdentityIssuer`
+     * lo prende: **l'identita' nasce dal pagamento**, non da un tap a parte.
+     *
+     * ⚠️ E il `session_id` arriva dalla rete: si verifica che sia di **questo** armadio e ancora
+     * **da pagare**. Un chiosco compromesso che indicasse la sessione di un altro locale se la
+     * prenderebbe.
+     *
+     * @param  array<string, mixed>  $payload
      */
-    private function legaCarta(Cabinet $cabinet, string $token, mixed $sessionId): void
+    private function cardPayment(Cabinet $cabinet, array $payload): void
     {
+        $sessionId = $payload['session_id'] ?? null;
+        $cardToken = $payload['card_token'] ?? null;
+
         $session = is_string($sessionId) && $sessionId !== ''
             ? Session::query()
                 ->where('id', $sessionId)
                 ->where('cabinet_id', $cabinet->id)
-                ->where('status', 'active')
-                ->whereDoesntHave('identities')
+                ->where('status', 'created')
                 ->first()
             : null;
 
-        if (! $session instanceof Session) {
-            $this->audit->log('identity.bind', [
+        if (! $session instanceof Session || ! is_string($cardToken) || $cardToken === '') {
+            $this->audit->log('payment.card', [
                 'cabinet_id' => $cabinet->id,
                 'actor_type' => 'device',
                 'result' => 'fail',
-                'error_code' => 'no_session_to_bind',
+                'error_code' => 'no_session_to_pay',
             ]);
 
             return;
         }
 
-        $this->identities->bind($session, $token);
+        /** @var Payment $payment */
+        $payment = $session->payment()->firstOrFail();
 
-        $this->audit->log('identity.bind', [
-            'cabinet_id' => $cabinet->id,
-            'locker_id' => $session->locker_id,
-            'session_id' => $session->id,
-            'actor_type' => 'device',
+        $esito = $this->payments->handleCardPayment([
+            'provider_ref' => $payment->provider_ref,
+            'card_token' => $cardToken,
         ]);
+
+        $payment->forceFill(['payload' => $esito->payload])->save();
+
+        $this->sessions->confirmPayment($payment);
+    }
+
+    private static function chiaveTentativi(Cabinet $cabinet): string
+    {
+        return 'identity:'.$cabinet->id;
     }
 }

@@ -24,8 +24,15 @@ use App\Models\Session;
  */
 interface PaymentProvider
 {
-    /** Prepara il pagamento: ritorna cosa mostrare al cliente (QR, link, riferimento). */
-    public function create(Session $session): PaymentInstruction;
+    /**
+     * Prepara il pagamento: ritorna cosa mostrare al cliente (QR, link, riferimento).
+     *
+     * ⚠️ `$publicToken` e' il token della sessione, e serve perche' **il QR porti a una pagina
+     * vera** — quella su cui il cliente paga e lascia l'email. Un QR che contiene uno schema
+     * fantasia (`locker://…`) e' un QR che nessun telefono sa aprire: il flusso che il cliente
+     * vive davvero non esisterebbe.
+     */
+    public function create(Session $session, ?string $publicToken = null): PaymentInstruction;
 
     /**
      * Gestisce la notifica del provider (webhook, o il bottone mock).
@@ -33,6 +40,28 @@ interface PaymentProvider
      * @param  array<string, mixed>  $payload
      */
     public function handleCallback(array $payload): PaymentResult;
+
+    /**
+     * ⚠️ IL PAGAMENTO CON LA CARTA, e il **token** che ne esce.
+     *
+     * Il provider, incassando, restituisce un identificativo **stabile** di quella carta —
+     * `card_token` — e **quello diventa l'identita' della sessione**: la stessa carta,
+     * riappoggiata, riapre il vano. Non serve nessun altro scontrino.
+     *
+     * ⚠️ **Chi dice che i soldi sono arrivati e' il PROVIDER, non il device.** Il chiosco
+     * presenta la carta e nient'altro. Se bastasse la parola del chiosco, un chiosco
+     * compromesso potrebbe dichiarare "questa carta ha pagato" e regalarsi i vani.
+     *
+     * ⚠️⚠️ **Vincolo aperto**: l'EMV *sul* FCV5003 era stato accertato come NON fattibile (no
+     * secure element, no PCI, DejaOS non esegue SoftPOS). Il cliente riferisce che il provider
+     * dica il contrario. Questo contratto non prende posizione — e' esattamente il suo mestiere.
+     * **Ma va fatto confermare che il token torni stabile anche a IMPORTO ZERO**: senza,
+     * l'unico modo di identificare un cliente alla riapertura sarebbe fargli ripagare il
+     * guardaroba (D1 · D2 · D3).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public function handleCardPayment(array $payload): PaymentResult;
 
     public function refund(Payment $payment): void;
 }

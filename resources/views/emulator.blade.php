@@ -96,15 +96,15 @@
     </div>
 
     <div class="card">
-        <h3>🪪 Carta (NFC simulata)</h3>
+        <h3>💳 Carta (NFC simulata)</h3>
         <input type="text" id="card" value="CARTA-001">
-        <div style="display:flex;gap:6px;margin-top:8px">
-            <button class="btn" id="btn-tap" style="margin:0">🔓 Riapri</button>
-            <button class="btn warn" id="btn-tap-out" style="margin:0">🏁 Ho finito</button>
-        </div>
+        <button class="btn" id="btn-tap" style="margin-top:8px">Appoggia la carta</button>
         <p class="l-dim" style="font-size:11px;margin:6px 0 0">
-            ⚠️ L'intenzione si dichiara <b>prima</b> di aprire: dopo aver ripreso il cappotto
-            il cliente se ne va.
+            Il tap fa cose diverse a seconda di cosa sta chiedendo il chiosco:
+            <b>paga</b> se è la schermata della carta, <b>identifica</b> se il cliente ha già
+            dichiarato "riapri" o "ho finito".<br><br>
+            ⚠️ È la carta stessa a fare da scontrino: il token lo restituisce il
+            <b>provider di pagamento</b>, non il chiosco.
         </p>
     </div>
 
@@ -277,7 +277,19 @@ async function mockPay(paymentId, ok) {
     });
 }
 
-// ── Le schermate ──────────────────────────────────────────────────────────────
+// -- Le schermate del chiosco -------------------------------------------------
+//
+// ⚠️ IL FLUSSO, e il perché è fatto così:
+//
+//   home → metodo → (QR:  paghi sul telefono, lasci l'email, ricevi un CODICE)
+//                 → (NFC: appoggi la carta, il provider restituisce un TOKEN)
+//                 → vano
+//
+// L'IDENTITÀ NASCE DAL PAGAMENTO. Prima non era così: il cliente pagava col QR e non
+// riceveva niente con cui riaprire — poi premeva "ho finito" e non succedeva nulla.
+//
+// E per riaprire o riconsegnare: PRIMA si dichiara l'intento, POI ci si identifica (§7.1).
+
 async function render() {
     const s = $('screen');
 
@@ -289,8 +301,32 @@ async function render() {
             <button class="big-btn" id="btn-request" ${st.free === 0 ? 'disabled' : ''}>
                 ${st.free === 0 ? 'Armadio pieno' : 'Prendi un vano'}
             </button>
-            <div class="free">${st.free} vani liberi su ${st.total}</div>`;
-        $('btn-request')?.addEventListener('click', chiediVano);
+            <div class="free">${st.free} vani liberi su ${st.total}</div>
+            <div class="row" style="margin-top:18px">
+                <button class="big-btn gray" id="btn-reopen">🔓 Riapri il mio vano</button>
+                <button class="big-btn gray" id="btn-out">🏁 Ho finito</button>
+            </div>`;
+        $('btn-request')?.addEventListener('click', () => { stato.schermo = 'method'; render(); });
+
+        // ⚠️ L'intento si dichiara PRIMA di identificarsi: è l'unica cosa che distingue
+        // "torno a prendere il telefono" da "me ne vado".
+        $('btn-reopen').onclick = () => { stato.intento = 'reopen';   stato.schermo = 'identify'; render(); };
+        $('btn-out').onclick    = () => { stato.intento = 'checkout'; stato.schermo = 'identify'; render(); };
+        return;
+    }
+
+    if (stato.schermo === 'method') {
+        s.innerHTML = `
+            <h1>Come vuoi pagare?</h1>
+            <div class="sub">Il modo in cui paghi decide come riaprirai il vano</div>
+            <div class="row" style="flex-direction:column;gap:10px">
+                <button class="big-btn" id="m-qr">📱 QR — pago col telefono<br>
+                    <small style="font-weight:400;opacity:.8">ricevi un codice per email</small></button>
+                <button class="big-btn" id="m-nfc">💳 Carta — pago qui<br>
+                    <small style="font-weight:400;opacity:.8">la carta stessa riaprirà il vano</small></button>
+            </div>`;
+        $('m-qr').onclick  = () => chiediVano('qr');
+        $('m-nfc').onclick = () => chiediVano('nfc');
         return;
     }
 
@@ -298,50 +334,102 @@ async function render() {
         const p = stato.sessione.payment;
         s.innerHTML = `
             <h1>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</h1>
-            <div class="sub">Inquadra il QR col telefono per pagare</div>
+            <div class="sub">Inquadra il QR: si apre una pagina dove paghi e lasci l'email</div>
             <div class="qr"><img src="${p.qr_svg}" width="200" height="200" alt="QR"></div>
-            <div class="row">
-                <button class="big-btn green" id="ok">✅ Simula pagamento OK</button>
-                <button class="big-btn gray"  id="ko">❌ Fallito</button>
-            </div>`;
-        $('ok').onclick = async () => { await mockPay(p.id, true);  stato.schermo = 'card'; render(); };
-        $('ko').onclick = async () => { await mockPay(p.id, false); stato.schermo = 'home'; stato.sessione = null; render(); };
+            <div class="sub" style="font-size:12px;opacity:.7">
+                ⚠️ L'email la chiede la pagina, non il chiosco: digitarla su un touchscreen
+                al buio è un modo affidabile di sbagliarla.
+            </div>
+            <a class="big-btn green" style="display:block;text-decoration:none;text-align:center"
+               href="${p.qr_payload}" target="_blank">Apri la pagina di pagamento (simula il telefono)</a>`;
+        attendiPagamento();
         return;
     }
 
-    if (stato.schermo === 'card') {
-        // ⚠️ E' QUI che la carta diventa lo scontrino del vano.
-        //
-        // Prima questa schermata non esisteva: il cliente pagava col QR e la carta non gli
-        // veniva mai chiesta. Poi premeva "ho finito", la carta risultava sconosciuta, e non
-        // succedeva NIENTE — il vano restava occupato, e dal suo punto di vista il sistema
-        // era rotto.
+    if (stato.schermo === 'nfc') {
+        const p = stato.sessione.payment;
         s.innerHTML = `
-            <h1>Pagato ✅</h1>
-            <div class="sub">Ora <b>appoggia la carta</b>: sarà il tuo scontrino.<br>
-            Senza, non potrai riaprire il vano né riconsegnarlo.</div>
-            <div class="qr" style="font-size:64px">🪪</div>
-            <div class="sub">Usa il tap del pannello hardware, qui a destra.</div>`;
+            <h1>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</h1>
+            <div class="sub">Appoggia la carta per pagare.<br>
+            Sarà anche il tuo scontrino: la stessa carta riaprirà il vano.</div>
+            <div class="qr" style="font-size:64px">💳</div>
+            <div class="sub" style="font-size:12px;opacity:.7">
+                Usa il tap del pannello hardware, qui a destra.
+            </div>`;
         return;
     }
 
     if (stato.schermo === 'open') {
+        const qr = stato.sessione.payment_method === 'qr';
         s.innerHTML = `
             <div class="sub">Il tuo vano è</div>
             <div class="locker-num">${stato.sessione.locker_number}</div>
-            <div class="sub">Passa la carta per riaprirlo durante la serata</div>
+            <div class="sub">${qr
+                ? 'Ti abbiamo mandato per email il <b>codice a 6 cifre</b> per riaprirlo.'
+                : 'Riappoggia <b>la stessa carta</b> per riaprirlo o riconsegnarlo.'}</div>
             <button class="big-btn gray" id="home">Fine</button>`;
-        $('home').onclick = () => { stato.schermo = 'home'; render(); };
+        $('home').onclick = () => { stato.schermo = 'home'; stato.sessione = null; render(); };
+        return;
+    }
+
+    if (stato.schermo === 'identify') {
+        // ⚠️ Il chiosco non sa (e non deve sapere) se quella stringa è un codice o un token di
+        // carta: manda una stringa, e il server sa a chi appartiene.
+        s.innerHTML = `
+            <h1>${stato.intento === 'checkout' ? 'Riconsegna' : 'Riapertura'}</h1>
+            <div class="sub">Appoggia la carta, oppure digita il codice ricevuto per email</div>
+            <input id="codice" inputmode="numeric" maxlength="6" placeholder="000000"
+                   style="width:220px;padding:14px;font-size:32px;text-align:center;letter-spacing:8px;
+                          font-family:ui-monospace,monospace;border-radius:12px;border:1px solid #2f3542;
+                          background:#0f1115;color:#e7e9ee;margin:12px 0">
+            <div class="row">
+                <button class="big-btn green" id="ok-code">Conferma codice</button>
+                <button class="big-btn gray" id="annulla">Annulla</button>
+            </div>`;
+        $('ok-code').onclick = () => {
+            const c = $('codice').value.trim();
+            if (c.length !== 6) { alert('Il codice è di 6 cifre.'); return; }
+            emit({ type: 'identity.presented', token: c, intent: stato.intento });
+            stato.schermo = 'home';
+            render();
+        };
+        $('annulla').onclick = () => { stato.schermo = 'home'; render(); };
+        return;
     }
 }
 
-async function chiediVano() {
-    const r = await api('/sessions', {});
+async function chiediVano(metodo) {
+    const r = await api('/sessions', { method: metodo });
     if (r.error) { alert(r.error.message); return; }
     stato.sessione = r;
-    stato.schermo = 'pay';
+    stato.schermo = metodo === 'nfc' ? 'nfc' : 'pay';
     render();
 }
+
+/**
+ * ⚠️ Il chiosco NON sa quando il cliente ha pagato sul telefono: glielo deve chiedere al
+ * server. Il pagamento avviene su un altro dispositivo, in un'altra sessione — l'unica cosa
+ * che il chiosco possiede è il token pubblico.
+ */
+function attendiPagamento() {
+    clearInterval(stato.pollPagamento);
+
+    stato.pollPagamento = setInterval(async () => {
+        if (!['pay', 'nfc'].includes(stato.schermo) || !stato.sessione) { clearInterval(stato.pollPagamento); return; }
+
+        const r = await fetch('/api/v1/public/sessions/' + stato.sessione.public_token, {
+            headers: { 'Accept': 'application/json' },
+        }).then(x => x.json()).catch(() => null);
+
+        if (r?.data?.status === 'active') {
+            clearInterval(stato.pollPagamento);
+            log('pagamento confermato: identita' creata', 'l-in');
+            stato.schermo = 'open';
+            render();
+        }
+    }, 2000);
+}
+
 
 // ── I bottoni del pannello hardware ───────────────────────────────────────────
 $('btn-power').onclick = (e) => {
@@ -360,31 +448,44 @@ $('btn-ackmode').onclick = (e) => {
 
 $('delay').onchange = (e) => { stato.ritarda = e.target.checked; };
 
-// ⚠️ Il tap della carta dipende da cosa sta chiedendo il chiosco in quel momento.
-//
-// Se sta aspettando la carta del deposito, quel tap e' un `store`: lega la carta alla
-// sessione che sta servendo — e il chiosco dice ANCHE QUALE (`session_id`). Far indovinare
-// al server "la sessione piu' recente" e' cio' che permetteva alla carta di un cliente di
-// aprire il vano di un altro.
-function tap(intent) {
-    if (stato.schermo === 'card') {
+/*
+ * ⚠️ IL TAP DELLA CARTA fa due cose diverse, e dipende da cosa sta chiedendo il chiosco.
+ *
+ *   schermata "carta"  → è un PAGAMENTO. Il chiosco presenta la carta; il token e l'esito li
+ *                        dà il PROVIDER, non il chiosco. È così che un chiosco compromesso non
+ *                        può dichiarare "questa carta ha pagato" e regalarsi i vani.
+ *
+ *   dopo "riapri"/"ho finito" → è un'IDENTIFICAZIONE. La stessa carta produce lo stesso token,
+ *                        e quel token è già legato alla sessione: nasce dal pagamento.
+ */
+function appoggiaCarta() {
+    const carta = $('card').value;
+
+    if (stato.schermo === 'nfc') {
         emit({
-            type: 'identity.presented',
-            token: $('card').value,
-            intent: 'store',
+            type: 'payment.card',
             session_id: stato.sessione.session_id,
+            card_token: carta,
         });
 
-        stato.schermo = 'open';
+        log('carta presentata: aspetto la conferma del provider', 'l-out');
+
+        // Il chiosco non decide da solo che il pagamento è andato: aspetta il server.
+        attendiPagamento();
+        return;
+    }
+
+    if (stato.schermo === 'identify') {
+        emit({ type: 'identity.presented', token: carta, intent: stato.intento });
+        stato.schermo = 'home';
         render();
         return;
     }
 
-    emit({ type: 'identity.presented', token: $('card').value, intent });
+    log('nessuno sta chiedendo la carta adesso', 'l-warn');
 }
 
-$('btn-tap').onclick     = () => tap('reopen');
-$('btn-tap-out').onclick = () => tap('checkout');
+$('btn-tap').onclick = appoggiaCarta;
 
 $('btn-closed').onclick  = () => emit({ type: 'locker.closed', locker: stato.sessione?.locker_number ?? 1 });
 $('btn-lockerr').onclick = () => emit({ type: 'locker.error', locker: stato.sessione?.locker_number ?? 1, error: 'jammed' });

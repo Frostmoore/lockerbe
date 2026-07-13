@@ -5,7 +5,10 @@ namespace App\Domain\Session\Services;
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Command\Contracts\CommandDispatcher;
 use App\Domain\Command\Exceptions\DeviceOfflineException;
+use App\Domain\Identity\Services\IdentityIssuer;
 use App\Domain\Locker\Services\LockerInventoryService;
+use App\Domain\Payment\Contracts\PaymentProvider;
+use App\Domain\Payment\PaymentInstruction;
 use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Events\PaymentConfirmed;
 use App\Events\PaymentFailed;
@@ -36,6 +39,8 @@ final class SessionManager
         private readonly LockerInventoryService $inventory,
         private readonly CommandDispatcher $commands,
         private readonly AuditLogger $audit,
+        private readonly IdentityIssuer $identities,
+        private readonly PaymentProvider $payments,
     ) {}
 
     /**
@@ -45,10 +50,11 @@ final class SessionManager
      * di tempo per pagare. Il token pubblico e' cio' che si portera' via (link/QR) per
      * riaprire dal telefono senza avere un account.
      *
-     * @return array{session: Session, token: string} il token in chiaro esiste SOLO qui:
-     *                                                nel database ne resta l'hash
+     * @return array{session: Session, token: string, payment: PaymentInstruction} il token in
+     *                                                                             chiaro esiste SOLO qui: nel database ne
+     *                                                                             resta l'hash
      */
-    public function request(Cabinet $cabinet, ?int $amountCents = null): array
+    public function request(Cabinet $cabinet, ?int $amountCents = null, string $method = 'qr'): array
     {
         $locker = $this->inventory->assignFirstFree($cabinet);
 
@@ -60,6 +66,11 @@ final class SessionManager
             'status' => 'created',
             'amount_cents' => $amountCents ?? $this->tariffFor($cabinet),
             'currency' => 'EUR',
+
+            // ⚠️ Deciso dal cliente al chiosco, e da qui in poi non si tocca piu': e' cio' che
+            // stabilisce come otterra' l'identita' — un codice per email, o il token della
+            // sua carta.
+            'payment_method' => $method === 'nfc' ? 'nfc' : 'qr',
             'public_token_hash' => Identity::hashToken($rawToken),
             'reserved_until' => now()->addSeconds((int) config('locker.reservation.ttl')),
             'expires_at' => $this->endOfNightFor($cabinet),
@@ -68,6 +79,31 @@ final class SessionManager
         $session->save();
 
         $locker->update(['current_session_id' => $session->id]);
+
+        /*
+         * ⚠️ IL PAGAMENTO SI CREA QUI, non nel chiamante.
+         *
+         * Prima lo creava il KioskController, e nessun altro. Risultato: qualunque altra strada
+         * per aprire una sessione — un test, un webhook, domani un secondo chiosco — produceva
+         * una sessione **senza pagamento**, cioe' una sessione che non si puo' confermare.
+         *
+         * ⚠️ Il token pubblico entra nell'istruzione perche' **il QR deve portare a una pagina
+         * vera**: quella su cui il cliente paga e lascia l'email. Un QR con dentro uno schema
+         * fantasia (`locker://…`) e' un QR che nessun telefono sa aprire.
+         */
+        $istruzione = $this->payments->create($session, $rawToken);
+
+        $payment = Payment::create([
+            'session_id' => $session->id,
+            'provider' => $istruzione->provider,
+            'provider_ref' => $istruzione->providerRef,
+            'amount_cents' => $istruzione->amountCents,
+            'currency' => $istruzione->currency,
+            'status' => 'created',
+            'payload' => [],
+        ]);
+
+        $session->forceFill(['payment_id' => $payment->id])->save();
 
         $this->audit->log('session.request', [
             'cabinet_id' => $cabinet->id,
@@ -78,7 +114,7 @@ final class SessionManager
 
         SessionCreated::dispatch($session);
 
-        return ['session' => $session, 'token' => $rawToken];
+        return ['session' => $session, 'token' => $rawToken, 'payment' => $istruzione];
     }
 
     /**
@@ -152,12 +188,31 @@ final class SessionManager
                 ]);
             }
 
+            /*
+             * ⚠️⚠️ L'IDENTITA' NASCE QUI, E SOLO QUI.
+             *
+             * E' il momento in cui il sistema puo' sapere con certezza *chi* potra' riaprire
+             * quel vano: chi ha appena pagato **e' li' davanti**. Farlo dopo — con un tap
+             * "quando capita" — significava che chi pagava col QR non riceveva nessuna
+             * identita', e poi premeva "ho finito" senza che succedesse niente.
+             *
+             * Sta DENTRO confirmPayment, non nei chiamanti, perche' i chiamanti sono tanti e
+             * cresceranno: la pagina di pagamento, il chiosco con la carta, domani il webhook
+             * di Nexi. Se l'identita' si creasse fuori, basterebbe un chiamante nuovo che se
+             * ne dimentica per avere clienti che non possono riprendersi il cappotto.
+             */
+            $this->identities->issueFor($session->refresh(), $payment);
+
             $this->audit->log('payment.confirmed', [
                 'cabinet_id' => $session->cabinet_id,
                 'locker_id' => $locker->id,
                 'session_id' => $session->id,
                 'command_id' => $commandId,
-                'context' => ['provider' => $payment->provider, 'amount_cents' => $payment->amount_cents],
+                'context' => [
+                    'provider' => $payment->provider,
+                    'amount_cents' => $payment->amount_cents,
+                    'method' => $session->payment_method,
+                ],
             ]);
 
             PaymentConfirmed::dispatch($payment);

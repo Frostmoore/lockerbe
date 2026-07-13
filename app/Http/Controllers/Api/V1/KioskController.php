@@ -2,11 +2,9 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Domain\Payment\Contracts\PaymentProvider;
 use App\Domain\Session\Services\SessionManager;
 use App\Models\Cabinet;
 use App\Models\Device;
-use App\Models\Payment;
 use Endroid\QrCode\QrCode;
 use Endroid\QrCode\Writer\PngWriter;
 use Illuminate\Http\JsonResponse;
@@ -28,7 +26,6 @@ final class KioskController
 {
     public function __construct(
         private readonly SessionManager $sessions,
-        private readonly PaymentProvider $payments,
     ) {}
 
     /** Lo stato dell'armadio: quanti vani liberi, e quali. */
@@ -59,28 +56,37 @@ final class KioskController
     {
         $cabinet = $this->cabinetOf($request);
 
-        ['session' => $session, 'token' => $token] = $this->sessions->request($cabinet);
-
-        $istruzione = $this->payments->create($session);
-
-        $payment = Payment::create([
-            'session_id' => $session->id,
-            'provider' => $istruzione->provider,
-            'provider_ref' => $istruzione->providerRef,
-            'amount_cents' => $istruzione->amountCents,
-            'currency' => $istruzione->currency,
-            'status' => 'created',
-            'payload' => [],
+        /*
+         * ⚠️ COME VUOLE PAGARE decide TUTTO il flusso di identita', quindi si chiede subito:
+         *
+         *   qr   → paga sul telefono, lascia l'email, riceve un **codice a 6 cifre**;
+         *   nfc  → paga con la carta, e il token che il provider restituisce **e'** l'identita'.
+         *
+         * Il default e' `qr`: e' l'unico dei due che oggi funziona di sicuro (sull'NFC pende un
+         * vincolo hardware aperto — vedi PaymentProvider).
+         */
+        $dati = $request->validate([
+            'method' => ['sometimes', 'in:qr,nfc'],
         ]);
 
-        $session->forceFill(['payment_id' => $payment->id])->save();
+        $metodo = (string) ($dati['method'] ?? 'qr');
+
+        // ⚠️ Il pagamento lo crea SessionManager, non piu' questo controller: qualunque altra
+        // strada per aprire una sessione produceva altrimenti una sessione senza pagamento,
+        // cioe' una sessione che non si puo' confermare.
+        [
+            'session' => $session,
+            'token' => $token,
+            'payment' => $istruzione,
+        ] = $this->sessions->request($cabinet, null, $metodo);
 
         return new JsonResponse([
             'session_id' => $session->id,
             'locker_number' => $session->locker()->firstOrFail()->number,
             'public_token' => $token,
+            'payment_method' => $metodo,
             'payment' => [
-                'id' => $payment->id,
+                'id' => $session->payment_id,
                 'amount_cents' => $istruzione->amountCents,
                 'currency' => $istruzione->currency,
                 'qr_payload' => $istruzione->qrPayload,
