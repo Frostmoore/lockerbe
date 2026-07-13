@@ -26,6 +26,10 @@ class StoreCabinetRequest extends FormRequest
             ],
             'site_id' => ['nullable', 'uuid', 'exists:sites,id'],
 
+            // Il chiosco avvitato dentro questo armadio, se il tecnico l'ha gia' registrato.
+            // Sono un oggetto solo: e' comodo crearli con un'operazione sola.
+            'device_id' => ['nullable', 'uuid'],
+
             // Quanti vani generare. Il minimo e' 1: un armadio senza vani non e' un armadio.
             'lockers' => ['required', 'integer', 'min:1', 'max:512'],
 

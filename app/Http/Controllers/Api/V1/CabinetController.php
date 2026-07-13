@@ -3,11 +3,14 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Domain\Cabinet\Services\CabinetService;
+use App\Domain\Device\Services\DeviceProvisioningService;
 use App\Http\Requests\StoreCabinetRequest;
 use App\Http\Requests\UpdateCabinetRequest;
 use App\Http\Resources\CabinetResource;
 use App\Http\Resources\LockerResource;
 use App\Models\Cabinet;
+use App\Models\Device;
+use App\Models\User;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,7 +28,10 @@ final class CabinetController
 {
     use AuthorizesRequests;
 
-    public function __construct(private readonly CabinetService $cabinets) {}
+    public function __construct(
+        private readonly CabinetService $cabinets,
+        private readonly DeviceProvisioningService $devices,
+    ) {}
 
     public function index(Request $request): AnonymousResourceCollection
     {
@@ -55,12 +61,26 @@ final class CabinetController
 
         $data = $request->validated();
         $lockerCount = (int) $data['lockers'];
-        unset($data['lockers']);
+        $deviceId = $data['device_id'] ?? null;
+        unset($data['lockers'], $data['device_id']);
 
         /** @var array{name: string, code: string, site_id?: string|null, settings?: array<string, mixed>} $data */
         $cabinet = $this->cabinets->create($data, $lockerCount);
 
-        return (new CabinetResource($cabinet))
+        // Chiosco e armadio sono un oggetto solo: se il tecnico ha gia' registrato il
+        // dispositivo, li lega qui — e ha finito.
+        if (is_string($deviceId)) {
+            /** @var User $user */
+            $user = $request->user();
+
+            $this->devices->attachToCabinet(
+                Device::query()->whereKey($deviceId)->firstOrFail(),
+                $cabinet,
+                $user,
+            );
+        }
+
+        return (new CabinetResource($cabinet->load('device')))
             ->response()
             ->setStatusCode(JsonResponse::HTTP_CREATED);
     }

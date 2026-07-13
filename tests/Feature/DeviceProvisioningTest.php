@@ -2,7 +2,6 @@
 
 use App\Models\Cabinet;
 use App\Models\Device;
-use App\Models\DeviceEnrollment;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -16,205 +15,215 @@ beforeEach(function () {
 
     $this->staff = User::factory()->forTenant($this->tenant)->create();
     $this->staff->assignRole('tenant_staff');
-
-    $this->cabinet = Cabinet::factory()->forTenant($this->tenant)->create(['code' => 'G1']);
 });
 
 /*
- * L'identita' del chiosco.
+ * L'identita' del chiosco, nel flusso vero:
  *
- * Le due domande che questa fase risolve:
- *   1. come si assegna FISICAMENTE un chiosco a un armadio?
- *   2. dopo un calo di corrente (o un reflash), come sappiamo che e' sempre lui?
+ *   1. l'armadio arriva (lamiera + serrature + FCV5003 avvitato in mezzo: UN oggetto)
+ *   2. il tecnico registra il dispositivo sul server, col serial letto dall'etichetta
+ *   3. il tecnico crea l'armadio e lo lega a quel dispositivo
+ *   4. il tecnico preme Attiva -> il chiosco acceso ritira le credenziali
+ *   5. fine
  */
 
-it('accoppia il chiosco all\'armadio col codice mostrato a schermo', function () {
-    // 1. Il chiosco si presenta. Non e' autenticato: non ha ancora un'identita' da esibire.
-    $annuncio = $this->postJson('/api/v1/devices/announce', [
-        'serial' => 'FCV5003-AAA-001',
-        'model' => 'VF203_V12',
-    ])->assertStatus(202);
-
-    $codice = $annuncio->json('pairing_code');
-
-    expect($codice)->toBeString()->toHaveLength(6);
-
-    // 2. Il tecnico, DAVANTI a quell'armadio, digita il codice che legge su QUELLO schermo.
-    // ⚠️ E' l'unico punto in cui si decide quale chiosco comanda quale armadio: nessun
-    // automatismo puo' saperlo.
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice])
+it('percorre il setup completo: registra → crea armadio → attiva → il chiosco si prende le credenziali', function () {
+    // 2. Il tecnico registra il dispositivo.
+    $device = $this->actingAs($this->admin)
+        ->postJson('/api/v1/devices', ['serial' => 'FCV5003-0001', 'model' => 'VF203_V12'])
         ->assertCreated()
-        ->assertJsonPath('data.serial', 'FCV5003-AAA-001');
+        ->assertJsonPath('data.status', 'registered')
+        ->json('data');
 
-    // 3. Il chiosco ritira le credenziali. Una volta sola.
-    $credenziali = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-AAA-001'])
+    // 3. Crea l'armadio, gia' legato a quel dispositivo. Un oggetto solo, un'operazione sola.
+    $this->actingAs($this->admin)
+        ->postJson('/api/v1/cabinets', [
+            'name' => 'Guardaroba Ingresso',
+            'code' => 'G1',
+            'lockers' => 12,
+            'device_id' => $device['id'],
+        ])
+        ->assertCreated()
+        ->assertJsonPath('data.device.serial', 'FCV5003-0001');
+
+    // 4. Il tecnico preme Attiva: si apre la finestra.
+    $this->actingAs($this->admin)
+        ->postJson("/api/v1/devices/{$device['id']}/activate")
+        ->assertOk()
+        ->assertJsonPath('data.status', 'provisioned');
+
+    // Il chiosco si accende e ritira le credenziali. Non e' autenticato — non ha ancora nulla
+    // da esibire — ma non e' nemmeno un ignoto: il server sa gia' chi e' quel serial.
+    $credenziali = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0001'])
         ->assertOk()
         ->json('credentials');
 
-    expect($credenziali['mqtt_client_id'])->toBeString()
-        ->and($credenziali['mqtt_secret'])->toBeString()
-        ->and($credenziali['cabinet_id'])->toBe($this->cabinet->id);
+    $model = Device::query()->where('serial', 'FCV5003-0001')->firstOrFail();
 
-    // Sul server resta solo l'IMPRONTA del segreto, mai il segreto.
-    $device = Device::query()->where('serial', 'FCV5003-AAA-001')->firstOrFail();
-
-    expect($device->credential_fingerprint)->toBe(hash('sha256', $credenziali['mqtt_secret']))
-        ->and($device->cabinet_id)->toBe($this->cabinet->id)
-        ->and($device->paired_by)->toBe($this->admin->id);
+    expect($credenziali['mqtt_secret'])->toBeString()
+        // Sul server resta solo l'IMPRONTA del segreto, mai il segreto.
+        ->and($model->credential_fingerprint)->toBe(hash('sha256', $credenziali['mqtt_secret']))
+        ->and($credenziali['cabinet_id'])->toBe($model->cabinet_id);
 });
 
-it('non consegna le credenziali due volte', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-BBB-002'])
-        ->json('pairing_code');
+it('non consegna le credenziali fuori dalla finestra di attivazione', function () {
+    $device = registraChiosco($this, 'FCV5003-0002');
 
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice]);
-
-    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-BBB-002'])->assertOk();
-
-    // ⚠️ Un secondo ritiro e' rifiutato: se il device le ha perse, deve passare da un umano.
-    // Consegnarle a chiunque le richieda significherebbe consegnarle a chiunque conosca il serial.
-    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-BBB-002'])
+    // ⚠️ Nessuno ha premuto "Attiva": il chiosco (o chi si spaccia per lui) non ottiene niente.
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0002'])
         ->assertStatus(409)
-        ->assertJsonPath('error.code', 'credentials_already_collected');
+        ->assertJsonPath('error.code', 'activation_closed');
 });
 
-it('rifiuta un codice di accoppiamento scaduto', function () {
-    $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-CCC-003']);
+it('chiude la finestra quando scade', function () {
+    $device = registraChiosco($this, 'FCV5003-0003');
 
-    $enrollment = DeviceEnrollment::query()->where('serial', 'FCV5003-CCC-003')->firstOrFail();
-    $codice = $enrollment->pairing_code;
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate")->assertOk();
 
-    $enrollment->forceFill(['pairing_code_expires_at' => now()->subMinute()])->save();
+    $device->refresh()->forceFill(['activation_expires_at' => now()->subMinute()])->save();
 
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice])
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0003'])
         ->assertStatus(409)
-        ->assertJsonPath('error.code', 'invalid_pairing_code');
+        ->assertJsonPath('error.code', 'activation_closed');
 });
 
-it('non accoppia un secondo chiosco a un armadio che ne ha gia\' uno', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-DDD-004'])
-        ->json('pairing_code');
+it('non consegna le credenziali due volte con la stessa attivazione', function () {
+    $device = registraChiosco($this, 'FCV5003-0004');
 
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice])
-        ->assertCreated();
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate");
 
-    $codice2 = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-EEE-005'])
-        ->json('pairing_code');
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0004'])->assertOk();
 
-    // Un armadio con due chioschi e' un armadio che riceve due volte gli stessi comandi.
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice2])
+    // Il ritiro chiude la finestra: serve una nuova attivazione.
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0004'])
         ->assertStatus(409)
-        ->assertJsonPath('error.code', 'cabinet_already_paired');
+        ->assertJsonPath('error.code', 'activation_closed');
 });
 
-it('nega a tenant_staff l\'accoppiamento di un chiosco', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-FFF-006'])
-        ->json('pairing_code');
+it('non dice niente su un serial che nessuno ha registrato', function () {
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-FANTASMA'])
+        ->assertStatus(409)
+        ->assertJsonPath('error.code', 'unknown_device');
+});
 
-    // Decidere quale chiosco comanda quale armadio e' gestione, non operativita'.
+/*
+ * ═══ IL CALO DI CORRENTE, E LA MEMORIA AZZERATA ═══
+ */
+
+it('ri-abilita il chiosco con lo STESSO bottone: un solo gesto da imparare', function () {
+    $device = registraChiosco($this, 'FCV5003-0005');
+
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate");
+    $prime = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0005'])->json('credentials');
+
+    // ⚡ Reflash / factory reset / OTA finito male: il chiosco ha perso tutto e ribussa.
+    // Fuori dalla finestra: non ottiene niente. Il server non ri-fida nessuno da solo — non
+    // puo' distinguere il chiosco vero da un impostore che conosce il serial.
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0005'])
+        ->assertStatus(409)
+        ->assertJsonPath('error.code', 'activation_closed');
+
+    // Il tecnico preme "Attiva". LO STESSO BOTTONE della prima installazione.
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate")->assertOk();
+
+    $nuove = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0005'])
+        ->assertOk()
+        ->json('credentials');
+
+    // Segreto nuovo, ma STESSO armadio: l'accoppiamento non si perde.
+    expect($nuove['mqtt_secret'])->not->toBe($prime['mqtt_secret'])
+        ->and($nuove['cabinet_id'])->toBe($prime['cabinet_id']);
+});
+
+it('non tocca le credenziali valide quando qualcuno bussa fuori dalla finestra', function () {
+    $device = registraChiosco($this, 'FCV5003-0006');
+
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate");
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0006'])->assertOk();
+
+    $improntaValida = $device->refresh()->credential_fingerprint;
+
+    // ⚠️ Un impostore che conosce il serial bussa. Non deve poter buttare fuori il chiosco vero
+    // semplicemente bussando: le credenziali in uso restano intatte.
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0006'])->assertStatus(409);
+
+    expect($device->refresh()->credential_fingerprint)->toBe($improntaValida);
+});
+
+/*
+ * ═══ AUTORIZZAZIONE E ISOLAMENTO ═══
+ */
+
+it('nega a tenant_staff la registrazione e l\'attivazione di un chiosco', function () {
     $this->actingAs($this->staff)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice])
+        ->postJson('/api/v1/devices', ['serial' => 'FCV5003-0007'])
+        ->assertForbidden();
+
+    $device = registraChiosco($this, 'FCV5003-0008');
+
+    $this->actingAs($this->staff)
+        ->postJson("/api/v1/devices/{$device->id}/activate")
         ->assertForbidden();
 });
 
-/*
- * ═══ LA SECONDA DOMANDA: dopo un calo di corrente, e' sempre lui? ═══
- */
+it('non lascia vedere i chioschi di un altro locale', function () {
+    $altro = Tenant::factory()->create();
+    $cabinetAltrui = Cabinet::factory()->forTenant($altro)->create();
+    Device::factory()->forCabinet($cabinetAltrui)->create(['serial' => 'FCV5003-ALTRUI']);
 
-it('non ri-fida da solo un serial gia\' accoppiato che si ripresenta', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-GGG-007'])
-        ->json('pairing_code');
+    registraChiosco($this, 'FCV5003-0009');
 
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice]);
+    $seriali = collect($this->actingAs($this->admin)->getJson('/api/v1/devices')->json('data'))
+        ->pluck('serial');
 
-    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-GGG-007'])->assertOk();
-
-    $device = Device::query()->where('serial', 'FCV5003-GGG-007')->firstOrFail();
-    $improntaOriginale = $device->credential_fingerprint;
-
-    // ⚠️ Qualcuno si ripresenta con quel serial. Puo' essere il chiosco vero che ha perso la
-    // memoria (reflash, factory reset, OTA finito male) — oppure un impostore che conosce il
-    // serial. Il server NON PUO' distinguerli, quindi non ci prova.
-    $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-GGG-007'])
-        ->assertStatus(409)
-        ->assertJsonPath('error.code', 'already_paired');
-
-    $device->refresh();
-
-    // Nessuna credenziale nuova, e — soprattutto — ⚠️ **le vecchie restano valide**:
-    // invalidarle qui darebbe a chiunque conosca un serial il potere di buttare fuori un
-    // chiosco vero, semplicemente bussando.
-    expect($device->credential_fingerprint)->toBe($improntaOriginale)
-        ->and($device->needsReenrollment())->toBeTrue();   // ma lo staff lo vede
+    expect($seriali)->toContain('FCV5003-0009')
+        ->and($seriali)->not->toContain('FCV5003-ALTRUI');
 });
 
-it('ri-abilita il chiosco solo su conferma di un umano', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-HHH-008'])
-        ->json('pairing_code');
+it('revoca un chiosco e ne cancella le credenziali', function () {
+    $device = registraChiosco($this, 'FCV5003-0010');
+
+    $this->actingAs($this->admin)->postJson("/api/v1/devices/{$device->id}/activate");
+    $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-0010']);
 
     $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice]);
-
-    $primeCredenziali = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-HHH-008'])
-        ->json('credentials');
-
-    $device = Device::query()->where('serial', 'FCV5003-HHH-008')->firstOrFail();
-
-    // L'operatore guarda il chiosco, riconosce che e' quello vero, e lo ri-abilita.
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/devices/{$device->id}/reissue")
-        ->assertOk();
-
-    $nuoveCredenziali = $this->postJson('/api/v1/devices/credentials', ['serial' => 'FCV5003-HHH-008'])
-        ->assertOk()
-        ->json('credentials');
-
-    // Il segreto e' nuovo, ma l'ARMADIO e' lo stesso: l'accoppiamento non si perde. E' il
-    // motivo per cui l'identita' e' il serial (che sopravvive a un reflash) e non un uuid che
-    // il device si inventa (che non ci sopravvive).
-    expect($nuoveCredenziali['mqtt_secret'])->not->toBe($primeCredenziali['mqtt_secret'])
-        ->and($nuoveCredenziali['cabinet_id'])->toBe($this->cabinet->id)
-        ->and($device->refresh()->needsReenrollment())->toBeFalse();
-});
-
-it('revoca un chiosco rubato e ne cancella le credenziali', function () {
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-III-009'])
-        ->json('pairing_code');
-
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$this->cabinet->id}/pair", ['pairing_code' => $codice]);
-
-    $device = Device::query()->where('serial', 'FCV5003-III-009')->firstOrFail();
-
-    // ⚠️ La revoca e' la SOLA difesa reale: il FCV5003 non ha un secure element, quindi il
-    // segreto nella sua memoria e' estraibile da chi ce l'ha in mano. Non ci si difende: ci si
-    // accorge, e si revoca.
-    $this->actingAs($this->admin)
-        ->postJson("/api/v1/devices/{$device->id}/revoke", ['reason' => 'Chiosco rubato dal locale'])
+        ->postJson("/api/v1/devices/{$device->id}/revoke", ['reason' => 'Chiosco rubato'])
         ->assertOk()
         ->assertJsonPath('data.status', 'revoked');
 
-    $device->refresh();
+    expect($device->refresh()->credential_fingerprint)->toBeNull();
 
-    expect($device->isRevoked())->toBeTrue()
-        ->and($device->credential_fingerprint)->toBeNull();
-});
-
-it('non lascia accoppiare un chiosco all\'armadio di un altro locale', function () {
-    $altro = Tenant::factory()->create();
-    $cabinetAltrui = Cabinet::factory()->forTenant($altro)->create();
-
-    $codice = $this->postJson('/api/v1/devices/announce', ['serial' => 'FCV5003-JJJ-010'])
-        ->json('pairing_code');
-
-    // L'armadio di un altro locale non esiste, per questo admin: 404.
+    // Un chiosco revocato non si riattiva: si sostituisce.
     $this->actingAs($this->admin)
-        ->postJson("/api/v1/cabinets/{$cabinetAltrui->id}/pair", ['pairing_code' => $codice])
-        ->assertNotFound();
+        ->postJson("/api/v1/devices/{$device->id}/activate")
+        ->assertStatus(409)
+        ->assertJsonPath('error.code', 'device_revoked');
 });
+
+it('non attiva un dispositivo che non e\' ancora legato a un armadio', function () {
+    $device = $this->actingAs($this->admin)
+        ->postJson('/api/v1/devices', ['serial' => 'FCV5003-0011'])
+        ->json('data');
+
+    $this->actingAs($this->admin)
+        ->postJson("/api/v1/devices/{$device['id']}/activate")
+        ->assertStatus(409)
+        ->assertJsonPath('error.code', 'device_without_cabinet');
+});
+
+/** Registra il chiosco e crea il suo armadio: i passi 2 e 3 del setup. */
+function registraChiosco(object $test, string $serial): Device
+{
+    $device = $test->actingAs($test->admin)
+        ->postJson('/api/v1/devices', ['serial' => $serial])
+        ->json('data');
+
+    $test->actingAs($test->admin)->postJson('/api/v1/cabinets', [
+        'name' => 'Armadio '.$serial,
+        'code' => substr($serial, -4),
+        'lockers' => 8,
+        'device_id' => $device['id'],
+    ]);
+
+    return Device::query()->where('serial', $serial)->firstOrFail();
+}

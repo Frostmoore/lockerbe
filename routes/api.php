@@ -65,10 +65,18 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
         Route::patch('cabinets/{cabinet}', [CabinetController::class, 'update']);
         Route::get('cabinets/{cabinet}/lockers', [CabinetController::class, 'lockers']);
 
-        // Identita' del chiosco: accoppiamento, ri-abilitazione, revoca.
-        // ⚠️ `pair` e' l'unico punto in cui si decide quale chiosco comanda quale armadio.
-        Route::post('cabinets/{cabinet}/pair', [DeviceController::class, 'pair']);
-        Route::post('devices/{device}/reissue', [DeviceController::class, 'reissue']);
+        /*
+         * Il chiosco (FCV5003). Fisicamente e' tutt'uno con l'armadio: lamiera, serrature e
+         * uno schermo avvitato in mezzo. Il tecnico lo registra sul SERVER col serial letto
+         * dall'etichetta, lo lega all'armadio, e preme Attiva.
+         *
+         * ⚠️ `activate` e' anche il bottone della RI-ABILITAZIONE: stesso click, nuovo segreto,
+         * stesso armadio. Un solo gesto da imparare.
+         */
+        Route::get('devices', [DeviceController::class, 'index']);
+        Route::post('devices', [DeviceController::class, 'store']);
+        Route::post('devices/{device}/attach', [DeviceController::class, 'attach']);
+        Route::post('devices/{device}/activate', [DeviceController::class, 'activate']);
         Route::post('devices/{device}/revoke', [DeviceController::class, 'revoke']);
 
         Route::get('lockers/{locker}', [LockerController::class, 'show']);
@@ -89,20 +97,17 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
 });
 
 /*
- * IL CHIOSCO CHE CHIEDE UN'IDENTITA'.
+ * IL CHIOSCO CHE RITIRA LE PROPRIE CREDENZIALI.
  *
- * ⚠️ Le uniche rotte non autenticate e non tenant-scoped del sistema, e non poteva essere
- * altrimenti: un FCV5003 appena tolto dalla scatola non ha nessuna identita' da esibire —
- * sta chiedendo di averne una.
+ * ⚠️ Non autenticata, e non poteva essere altrimenti: il chiosco non ha ancora nulla da
+ * esibire, e' venuto a prendersela. Ma **non e' un ignoto**: il server sa gia' chi e' quel
+ * serial, glielo ha detto un tecnico quando ha registrato il dispositivo.
  *
- * Cio' che ottengono e' pero' **inerte**: un codice a sei cifre da mostrare a schermo. Finche'
- * un operatore non lo accoppia a un armadio — stando fisicamente davanti a quell'armadio e
- * leggendo il codice su quello schermo — il dispositivo non esiste per il sistema.
+ * Consegna solo dentro la **finestra di attivazione** — un gesto umano, deliberato e a tempo.
+ * Fuori dalla finestra, chiunque bussi con quel serial non ottiene niente.
  */
-Route::prefix('devices')->middleware('throttle:20,1')->group(function (): void {
-    Route::post('announce', [DeviceController::class, 'announce']);
-    Route::post('credentials', [DeviceController::class, 'credentials']);
-});
+Route::post('devices/credentials', [DeviceController::class, 'credentials'])
+    ->middleware('throttle:20,1');
 
 /*
  * PUBBLICHE — il cliente che ha depositato il cappotto (piano §10).

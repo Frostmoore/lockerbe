@@ -7,7 +7,6 @@ use App\Domain\Device\Exceptions\PairingException;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Cabinet;
 use App\Models\Device;
-use App\Models\DeviceEnrollment;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -15,45 +14,49 @@ use Illuminate\Support\Str;
 /**
  * L'identita' di un chiosco: come nasce, come si dimostra, come si revoca.
  *
- * ═══ IL PRINCIPIO ═══
+ * ═══ IL FLUSSO, COME AVVIENE IN CAMPO ═══
  *
- * **Un ID che il device si genera da solo e' una dichiarazione, non una prova.** Se il
- * chiosco inventa un identificativo e lo manda, chiunque puo' inventarne uno e mandarlo:
- * l'ID dice "chi sono", non dimostra "sono io". La dimostrazione la fa un **segreto** — e la
- * domanda vera diventa: *chi ha dato quel segreto al device, e in base a cosa?*
+ *  1. L'armadio arriva in sede. E' **un oggetto solo**: lamiera, sportelli, serrature, e un
+ *     FCV5003 avvitato in mezzo.
+ *  2. Il tecnico **registra il dispositivo sul server**, leggendone il `serial` dall'etichetta.
+ *  3. Il tecnico **crea l'armadio** (nome, numero di vani) e lo lega a quel dispositivo.
+ *  4. Il tecnico preme **Attiva**. Il chiosco, acceso, si presenta e ritira le sue credenziali.
+ *  5. Fine. I riavvii successivi sono trasparenti.
  *
- * Risposta: **un essere umano, fisicamente davanti a quell'armadio.** Nessun automatismo
- * puo' sapere quale armadio ha davanti un chiosco.
+ * ═══ PERCHE' NON SERVE UN CODICE DA LEGGERE SULLO SCHERMO ═══
  *
- * ═══ IL FLUSSO ═══
+ * Perche' **il server sa gia' chi e'**: gliel'ha detto un umano al passo 2, prima ancora che il
+ * dispositivo venisse acceso. Non c'e' nessun chiosco misterioso da identificare, e nessun
+ * rischio di legarlo all'armadio sbagliato: e' il tecnico che ha scritto quel serial accanto a
+ * quell'armadio.
  *
- *  1. ANNUNCIO   Il chiosco non accoppiato si presenta col proprio `serial` (l'identita' che
- *                l'hardware si porta addosso). Riceve un **codice a 6 cifre** e lo mostra
- *                sullo schermo.
- *  2. ACCOPPIAM. Il tecnico, **davanti a quell'armadio**, apre il pannello, sceglie l'Armadio
- *                giusto e digita il codice che sta leggendo su **quello** schermo. E' questo
- *                che impedisce di legare il chiosco all'armadio sbagliato — un errore che il
- *                software, da solo, non potrebbe MAI accorgersi di aver commesso.
- *  3. CREDENZIALI Il server emette le credenziali MQTT per-device. Il chiosco le ritira
- *                **una volta sola** e le salva. Sul server ne resta solo l'impronta.
- *  4. RIAVVII    Trasparenti: legge le credenziali, si connette, e' lui.
+ * Cio' che resta da garantire e' solo che le credenziali finiscano **nel dispositivo giusto** e
+ * non in mano a un impostore che conosce il serial. Da qui la **finestra di attivazione**: un
+ * gesto umano, deliberato e a tempo. Fuori dalla finestra, chiunque bussi con quel serial —
+ * foss'anche il chiosco vero — non ottiene niente.
  *
- * ═══ CIO' CHE NON POSSIAMO FARE, DETTO CHIARAMENTE ═══
+ * ═══ RI-ABILITAZIONE: UN CLICK ═══
  *
- * ⚠️ Il FCV5003 **non ha un secure element** (e' lo stesso motivo per cui l'EMV non e'
- * fattibile). Qualunque segreto salvato nella sua memoria e', in linea di principio,
- * **estraibile da chi ha il dispositivo in mano**. Contro questo non ci si difende: ci si
- * **accorge** (§ clonazione) e si **revoca**.
+ * Il chiosco ha perso la memoria (reflash, factory reset, OTA finito male)? Il tecnico preme
+ * **Attiva**. Stesso bottone, stesso gesto. Nuovo segreto, stesso armadio.
  *
- * ⚠️ Cio' che ci salva e' il raggio del danno: le ACL del broker legheranno quelle credenziali
- * **ai soli topic del suo armadio** (F5). Un chiosco rubato e portato altrove puo' comandare
- * soltanto l'armadio da cui e' stato staccato — cioe' uno che e' gia' fisicamente
- * compromesso. Il furto non da' accesso a nient'altro.
+ * ═══ IL MODELLO DI MINACCIA, REALISTICO ═══
+ *
+ * ⚠️ **Non stiamo difendendo il segreto dentro il device, e sarebbe inutile provarci.** Chi
+ * riesce a staccare dal muro uno schermo avvitato dentro un armadio ha gia' in mano l'armadio,
+ * i vani e i cappotti. A quel punto la memoria del dispositivo e' l'ultimo dei problemi.
+ *
+ * Il confine che difendiamo e' **quello di rete**:
+ *   - credenziali **per-device**: compromettere un chiosco non compromette gli altri;
+ *   - **ACL limitate al proprio armadio** (F5): un chiosco rubato comanda solo l'armadio da cui
+ *     e' stato staccato — cioe' uno gia' fisicamente compromesso. Non apre nient'altro, in
+ *     nessun altro locale;
+ *   - **revoca**: ci si accorge e si spegne.
  */
 final class DeviceProvisioningService
 {
-    /** Quanto vive il codice mostrato a schermo. Abbastanza per digitarlo, non per girarci intorno. */
-    private const PAIRING_CODE_TTL_MINUTES = 10;
+    /** Quanto resta aperta la finestra di attivazione. Il tempo di accendere il chiosco. */
+    private const ACTIVATION_WINDOW_MINUTES = 15;
 
     public function __construct(
         private readonly AuditLogger $audit,
@@ -61,258 +64,184 @@ final class DeviceProvisioningService
     ) {}
 
     /**
-     * Il chiosco si presenta. Non e' autenticato: non ha ancora un'identita' da esibire.
+     * Passo 2 — Il tecnico registra il dispositivo leggendo il serial dall'etichetta.
      *
-     * @return array{enrollment: DeviceEnrollment, pairing_code: string}
-     *
-     * @throws PairingException se il serial appartiene a un dispositivo gia' accoppiato
+     * L'armadio puo' non esistere ancora: si lega dopo (o si crea gia' legato).
      */
-    public function announce(string $serial, ?string $model, ?string $mac, ?string $ip): array
+    public function register(string $serial, ?string $model, ?Cabinet $cabinet, User $by): Device
     {
-        return $this->context->runWithBypass(function () use ($serial, $model, $mac, $ip): array {
-            $device = Device::query()->where('serial', $serial)->first();
+        $device = Device::create([
+            'cabinet_id' => $cabinet?->id,
+            'serial' => $serial,
+            'model' => $model ?? 'VF203_V12',
+            // L'identificativo con cui si presentera' al broker (F5). Nasce qui, non lo
+            // inventa il dispositivo: un ID auto-generato sarebbe una dichiarazione, non una
+            // prova.
+            'mqtt_client_id' => 'dev-'.Str::lower(Str::random(10)),
+            'status' => 'registered',
+        ]);
 
-            if ($device !== null && $device->status !== 'revoked') {
-                /*
-                 * ⚠️ Un serial GIA' accoppiato che si ripresenta senza credenziali.
-                 *
-                 * Puo' essere legittimo (memoria azzerata da un reflash, un factory reset, un
-                 * OTA finito male) o puo' essere un impostore che conosce il serial. Il server
-                 * **non puo' distinguere i due casi**, quindi non ci prova: non ri-fida
-                 * nessuno da solo. Segna la richiesta e chiede a un umano.
-                 *
-                 * ⚠️ Le credenziali vecchie NON vengono invalidate qui: farlo darebbe a
-                 * chiunque conosca un serial il potere di buttare fuori un chiosco vero,
-                 * semplicemente bussando.
-                 */
-                $device->forceFill(['reenrollment_requested_at' => now()])->save();
+        $this->audit->log('device.registered', [
+            'cabinet_id' => $cabinet?->id,
+            'actor' => $by,
+            'context' => ['serial' => $serial, 'model' => $device->model],
+        ]);
 
-                $this->audit->log('device.reenrollment_requested', [
-                    'cabinet_id' => $device->cabinet_id,
-                    'actor_type' => 'device',
-                    'result' => 'fail',
-                    'error_code' => 'already_paired',
-                    'context' => ['serial' => $serial, 'ip' => $ip],
-                ]);
-
-                throw new PairingException(
-                    'already_paired',
-                    'Questo dispositivo risulta gia\' accoppiato. La richiesta di ri-abilitazione '
-                    .'e\' stata registrata: serve la conferma di un operatore.',
-                );
-            }
-
-            $code = $this->generatePairingCode();
-
-            $enrollment = DeviceEnrollment::query()->updateOrCreate(
-                ['serial' => $serial],
-                [
-                    'model' => $model,
-                    'mac_address' => $mac,
-                    'ip_address' => $ip,
-                    'pairing_code' => $code,
-                    'pairing_code_expires_at' => now()->addMinutes(self::PAIRING_CODE_TTL_MINUTES),
-                    'status' => 'pending',
-                    'credentials_payload' => null,
-                    'credentials_delivered_at' => null,
-                    'device_id' => null,
-                ],
-            );
-
-            $this->audit->log('device.announced', [
-                'actor_type' => 'device',
-                'context' => ['serial' => $serial, 'model' => $model, 'ip' => $ip],
-            ]);
-
-            return ['enrollment' => $enrollment, 'pairing_code' => $code];
-        });
+        return $device;
     }
 
-    /**
-     * Il tecnico accoppia il chiosco all'armadio che ha davanti.
-     *
-     * ⚠️ **Questo e' l'unico punto del sistema in cui si stabilisce quale chiosco comanda quale
-     * armadio**, e per questo passa da un umano e da un codice letto su uno schermo fisico.
-     * Legare il chiosco all'armadio sbagliato significa aprire l'armadietto di uno sconosciuto
-     * a ogni singola richiesta, e nessun controllo automatico potrebbe rilevarlo.
-     *
-     * @return array{device: Device, credentials: array<string, string>}
-     *
-     * @throws PairingException
-     */
-    public function pair(Cabinet $cabinet, string $pairingCode, User $by): array
+    /** Lega un dispositivo gia' registrato a un armadio (o lo sposta, se libero). */
+    public function attachToCabinet(Device $device, Cabinet $cabinet, User $by): Device
     {
-        $enrollment = $this->context->runWithBypass(
-            fn (): ?DeviceEnrollment => DeviceEnrollment::query()
-                ->where('pairing_code', strtoupper($pairingCode))
-                ->where('status', 'pending')
-                ->first(),
-        );
-
-        if ($enrollment === null || ! $enrollment->hasValidPairingCode()) {
-            $this->audit->log('device.pair', [
-                'cabinet_id' => $cabinet->id,
-                'result' => 'fail',
-                'error_code' => 'invalid_pairing_code',
-            ]);
-
-            throw new PairingException(
-                'invalid_pairing_code',
-                'Codice di accoppiamento non valido o scaduto. Fallo rigenerare dal chiosco.',
-            );
-        }
-
-        if ($cabinet->device()->exists()) {
+        if ($cabinet->device()->whereKeyNot($device->id)->exists()) {
             throw new PairingException(
                 'cabinet_already_paired',
-                'Questo armadio ha gia\' un chiosco. Scollegalo prima di associarne un altro.',
+                'Questo armadio ha gia\' un altro chiosco. Revocalo prima di associarne un altro.',
             );
         }
 
-        return DB::transaction(function () use ($cabinet, $enrollment, $by): array {
-            $secret = Str::random(48);
-            $clientId = 'cab-'.substr($cabinet->id, 0, 8).'-'.Str::lower(Str::random(6));
+        $device->forceFill(['cabinet_id' => $cabinet->id])->save();
 
-            $device = Device::create([
-                'cabinet_id' => $cabinet->id,
-                'serial' => $enrollment->serial,
-                'model' => $enrollment->model ?? 'VF203_V12',
-                'mqtt_client_id' => $clientId,
-                // Sul server resta solo l'IMPRONTA del segreto, mai il segreto.
-                'credential_fingerprint' => hash('sha256', $secret),
-                'mac_address' => $enrollment->mac_address,
-                'ip_address' => $enrollment->ip_address,
-                'status' => 'provisioned',
-            ]);
+        $this->audit->log('device.attached', [
+            'cabinet_id' => $cabinet->id,
+            'actor' => $by,
+            'context' => ['serial' => $device->serial, 'cabinet_code' => $cabinet->code],
+        ]);
 
-            $device->forceFill(['paired_at' => now(), 'paired_by' => $by->id])->save();
-
-            $credentials = [
-                'device_id' => $device->id,
-                'cabinet_id' => $cabinet->id,
-                'mqtt_client_id' => $clientId,
-                'mqtt_secret' => $secret,
-            ];
-
-            // Le credenziali restano qui, cifrate, finche' il chiosco non le ritira. Una volta
-            // sola: dopo la consegna il campo si svuota e il segreto non esiste piu' da
-            // nessuna parte, se non nella memoria del device.
-            $enrollment->forceFill([
-                'status' => 'paired',
-                'device_id' => $device->id,
-                'credentials_payload' => json_encode($credentials, JSON_THROW_ON_ERROR),
-                'pairing_code' => null,
-                'pairing_code_expires_at' => null,
-            ])->save();
-
-            $this->audit->log('device.paired', [
-                'cabinet_id' => $cabinet->id,
-                'actor' => $by,
-                'context' => [
-                    'serial' => $device->serial,
-                    'mqtt_client_id' => $clientId,
-                    'cabinet_code' => $cabinet->code,
-                ],
-            ]);
-
-            return ['device' => $device, 'credentials' => $credentials];
-        });
+        return $device;
     }
 
     /**
-     * Il chiosco ritira le credenziali. **Una volta sola.**
+     * Passo 4 — **Attiva**: apre la finestra e prepara le credenziali.
      *
-     * @return array<string, string>
+     * ⚠️ E' un gesto umano e deliberato: il tecnico lo fa quando il chiosco e' li', montato e
+     * acceso. E' anche il bottone della **ri-abilitazione**: stesso click, nuovo segreto,
+     * stesso armadio. Un solo gesto da imparare.
      *
-     * @throws PairingException
+     * ⚠️ Il segreto vecchio smette di valere **solo qui**, non prima: cosi' nessuno puo'
+     * buttare fuori un chiosco vero limitandosi a bussare col suo serial.
      */
-    public function collectCredentials(string $serial): array
+    public function activate(Device $device, User $by): Device
     {
-        return $this->context->runWithBypass(function () use ($serial): array {
-            $enrollment = DeviceEnrollment::query()->where('serial', $serial)->first();
+        if ($device->cabinet_id === null) {
+            throw new PairingException(
+                'device_without_cabinet',
+                'Questo dispositivo non e\' ancora legato a un armadio.',
+            );
+        }
 
-            if ($enrollment === null || $enrollment->status !== 'paired') {
-                throw new PairingException(
-                    'pairing_pending',
-                    'Non ancora accoppiato: un operatore deve associarti a un armadio.',
-                );
-            }
+        if ($device->isRevoked()) {
+            throw new PairingException(
+                'device_revoked',
+                'Questo dispositivo e\' stato revocato e non puo\' essere riattivato.',
+            );
+        }
 
-            if ($enrollment->credentials_payload === null) {
-                // Gia' ritirate. Non si consegnano due volte: se il device le ha perse, deve
-                // passare dalla ri-abilitazione — cioe' da un umano.
-                throw new PairingException(
-                    'credentials_already_collected',
-                    'Le credenziali sono gia\' state consegnate. Serve una ri-abilitazione.',
-                );
-            }
-
-            /** @var array<string, string> $credentials */
-            $credentials = json_decode((string) $enrollment->credentials_payload, true, 512, JSON_THROW_ON_ERROR);
-
-            $enrollment->forceFill([
-                'credentials_payload' => null,
-                'credentials_delivered_at' => now(),
-            ])->save();
-
-            $this->audit->log('device.credentials_collected', [
-                'actor_type' => 'device',
-                'context' => ['serial' => $serial],
-            ]);
-
-            return $credentials;
-        });
-    }
-
-    /**
-     * Un operatore ri-abilita un dispositivo che ha perso le credenziali.
-     *
-     * ⚠️ Passa da un umano **per costruzione**: il server non puo' distinguere un chiosco che
-     * ha davvero perso la memoria da un impostore che ne conosce il serial. Chi conferma sta
-     * dicendo "quel dispositivo li', quello attaccato a quell'armadio, e' quello vero" — ed e'
-     * l'unica entita' al mondo in grado di dirlo.
-     *
-     * @return array<string, string>
-     */
-    public function reissueCredentials(Device $device, User $by): array
-    {
-        return DB::transaction(function () use ($device, $by): array {
+        return DB::transaction(function () use ($device, $by): Device {
             $secret = Str::random(48);
-
-            // ⚠️ Il vecchio segreto smette di valere QUI, non prima: se lo invalidassimo
-            // all'arrivo della richiesta, chiunque conoscesse un serial potrebbe buttare
-            // fuori un chiosco vero semplicemente bussando.
-            $device->forceFill([
-                'credential_fingerprint' => hash('sha256', $secret),
-                'reenrollment_requested_at' => null,
-                'status' => 'provisioned',
-            ])->save();
 
             $credentials = [
                 'device_id' => $device->id,
-                'cabinet_id' => $device->cabinet_id,
+                'cabinet_id' => (string) $device->cabinet_id,
                 'mqtt_client_id' => $device->mqtt_client_id,
                 'mqtt_secret' => $secret,
             ];
 
-            $this->context->runWithBypass(function () use ($device, $credentials): void {
-                DeviceEnrollment::query()->updateOrCreate(
-                    ['serial' => $device->serial],
-                    [
-                        'status' => 'paired',
-                        'device_id' => $device->id,
-                        'credentials_payload' => json_encode($credentials, JSON_THROW_ON_ERROR),
-                        'credentials_delivered_at' => null,
-                        'pairing_code' => null,
-                        'pairing_code_expires_at' => null,
-                    ],
-                );
-            });
+            $device->forceFill([
+                // Sul server resta solo l'IMPRONTA del segreto, mai il segreto.
+                'credential_fingerprint' => hash('sha256', $secret),
+                'credentials_payload' => json_encode($credentials, JSON_THROW_ON_ERROR),
+                'credentials_delivered_at' => null,
+                'activation_expires_at' => now()->addMinutes(self::ACTIVATION_WINDOW_MINUTES),
+                'activated_at' => now(),
+                'activated_by' => $by->id,
+                'status' => 'provisioned',
+            ])->save();
 
-            $this->audit->log('device.credentials_reissued', [
+            $this->audit->log('device.activated', [
                 'cabinet_id' => $device->cabinet_id,
                 'actor' => $by,
-                'context' => ['serial' => $device->serial],
+                'context' => [
+                    'serial' => $device->serial,
+                    'finestra_minuti' => self::ACTIVATION_WINDOW_MINUTES,
+                ],
+            ]);
+
+            return $device;
+        });
+    }
+
+    /**
+     * Il chiosco si accende e ritira le credenziali. **Una volta sola, e solo nella finestra.**
+     *
+     * ⚠️ Non e' autenticato — non ha ancora nulla da esibire, e' venuto a prendersela. Ma non
+     * e' nemmeno un ignoto: il server sa gia' chi e' quel serial, glielo ha detto un tecnico.
+     *
+     * @return array<string, string>
+     */
+    public function collectCredentials(string $serial, ?string $ip): array
+    {
+        return $this->context->runWithBypass(function () use ($serial, $ip): array {
+            $device = Device::query()->where('serial', $serial)->first();
+
+            if ($device === null) {
+                // Serial sconosciuto: nessuno lo ha registrato. Non diciamo altro.
+                throw new PairingException(
+                    'unknown_device',
+                    'Dispositivo non registrato. Un tecnico deve inserirlo nel server.',
+                );
+            }
+
+            if ($device->isRevoked()) {
+                throw new PairingException('device_revoked', 'Dispositivo revocato.');
+            }
+
+            if (! $device->hasOpenActivationWindow()) {
+                /*
+                 * ⚠️ Fuori dalla finestra. Puo' essere il chiosco vero che ha perso la memoria
+                 * — oppure un impostore che conosce il serial. Il server **non puo'
+                 * distinguerli**, e quindi non ci prova: chiede a un umano di premere "Attiva".
+                 *
+                 * Le credenziali attuali restano intatte: se le invalidassimo qui, chiunque
+                 * conoscesse un serial potrebbe buttare fuori un chiosco vero limitandosi a
+                 * bussare.
+                 */
+                $this->audit->log('device.activation_requested', [
+                    'cabinet_id' => $device->cabinet_id,
+                    'actor_type' => 'device',
+                    'result' => 'fail',
+                    'error_code' => 'activation_closed',
+                    'context' => ['serial' => $serial, 'ip' => $ip],
+                ]);
+
+                throw new PairingException(
+                    'activation_closed',
+                    'Nessuna attivazione in corso per questo dispositivo. '
+                    .'Un tecnico deve premere "Attiva" nel pannello.',
+                );
+            }
+
+            if ($device->credentials_payload === null) {
+                throw new PairingException(
+                    'credentials_already_collected',
+                    'Credenziali gia\' consegnate. Serve una nuova attivazione.',
+                );
+            }
+
+            /** @var array<string, string> $credentials */
+            $credentials = json_decode((string) $device->credentials_payload, true, 512, JSON_THROW_ON_ERROR);
+
+            $device->forceFill([
+                'credentials_payload' => null,
+                'credentials_delivered_at' => now(),
+                'activation_expires_at' => null,   // la finestra si chiude col ritiro
+                'ip_address' => $ip,
+            ])->save();
+
+            $this->audit->log('device.credentials_collected', [
+                'cabinet_id' => $device->cabinet_id,
+                'actor_type' => 'device',
+                'context' => ['serial' => $serial, 'ip' => $ip],
             ]);
 
             return $credentials;
@@ -320,43 +249,26 @@ final class DeviceProvisioningService
     }
 
     /**
-     * Spegne un chiosco: rubato, clonato, o semplicemente sostituito.
+     * Revoca: chiosco rubato, guasto, o da sostituire.
      *
-     * ⚠️ E' la sola difesa reale contro un dispositivo compromesso, visto che il segreto sul
-     * device e' estraibile. In F5 la revoca dovra' propagarsi anche alle ACL del broker: un
-     * client revocato non deve piu' potersi connettere, non solo essere segnato come tale nel
-     * nostro database.
+     * ⚠️ Non serve a proteggere il segreto dentro il device — quello e' indifendibile, e non
+     * importa: chi stacca il chiosco dal muro ha gia' l'armadio. Serve a chiudere il **confine
+     * di rete**: da qui quelle credenziali non valgono piu' niente e (da F5) il broker non lo
+     * lascia nemmeno connettere.
      */
     public function revoke(Device $device, User $by, string $reason): void
     {
         $device->forceFill([
             'status' => 'revoked',
             'credential_fingerprint' => null,
+            'credentials_payload' => null,
+            'activation_expires_at' => null,
         ])->save();
-
-        $this->context->runWithBypass(function () use ($device): void {
-            DeviceEnrollment::query()
-                ->where('serial', $device->serial)
-                ->update(['status' => 'rejected', 'credentials_payload' => null]);
-        });
 
         $this->audit->log('device.revoked', [
             'cabinet_id' => $device->cabinet_id,
             'actor' => $by,
             'context' => ['serial' => $device->serial, 'reason' => $reason],
         ]);
-    }
-
-    /** Sei cifre, senza caratteri che si confondono a schermo (0/O, 1/I). */
-    private function generatePairingCode(): string
-    {
-        $alfabeto = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
-        $code = '';
-        for ($i = 0; $i < 6; $i++) {
-            $code .= $alfabeto[random_int(0, strlen($alfabeto) - 1)];
-        }
-
-        return $code;
     }
 }

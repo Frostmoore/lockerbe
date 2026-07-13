@@ -10,15 +10,23 @@ use App\Models\User;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 /**
- * L'identita' di un chiosco: nascita, prova, revoca.
+ * L'identita' di un chiosco.
  *
- * ⚠️ `announce` e `credentials` sono le uniche rotte del sistema **non autenticate e non
- * tenant-scoped**, e non poteva essere altrimenti: un FCV5003 appena tolto dalla scatola non
- * ha nessuna identita' da esibire — sta chiedendo di averne una. Sono rate-limited e non
- * possono fare nulla di irreversibile: un dispositivo annunciato resta **inerte** finche' un
- * umano non lo accoppia.
+ * Il flusso, come avviene in campo:
+ *
+ *   1. l'armadio arriva (lamiera + serrature + FCV5003 avvitato in mezzo: **un oggetto solo**)
+ *   2. il tecnico **registra il dispositivo** sul server, col serial letto dall'etichetta
+ *   3. il tecnico **crea l'armadio** e lo lega a quel dispositivo
+ *   4. il tecnico preme **Attiva** → il chiosco acceso ritira le credenziali
+ *   5. fine
+ *
+ * ⚠️ Nessun codice da leggere sullo schermo, nessuna "anticamera" di chioschi sconosciuti: il
+ * server **sa gia' chi e'**, glielo ha detto un tecnico al passo 2. Cio' che resta da garantire
+ * e' solo che le credenziali finiscano nel dispositivo giusto — e a questo serve la **finestra
+ * di attivazione**, che e' un gesto umano, deliberato e a tempo.
  */
 final class DeviceController
 {
@@ -26,41 +34,100 @@ final class DeviceController
 
     public function __construct(private readonly DeviceProvisioningService $provisioning) {}
 
-    /**
-     * 📣 Il chiosco si presenta. Riceve il codice da mostrare sul proprio schermo.
-     *
-     * ⚠️ Nessuna autenticazione: non ha ancora credenziali, e' venuto a chiederle. Cio' che
-     * ottiene, pero', e' inerte: un codice a 6 cifre e nient'altro. Fino a che un operatore
-     * non lo accoppia a un armadio, questo dispositivo non esiste per il sistema.
-     */
-    public function announce(Request $request): JsonResponse
+    public function index(): AnonymousResourceCollection
     {
-        $data = $request->validate([
-            'serial' => ['required', 'string', 'max:64'],
-            'model' => ['nullable', 'string', 'max:40'],
-            'mac_address' => ['nullable', 'string', 'max:24'],
-        ]);
+        $this->authorize('viewAny', Cabinet::class);
 
-        ['pairing_code' => $code, 'enrollment' => $enrollment] = $this->provisioning->announce(
-            (string) $data['serial'],
-            $data['model'] ?? null,
-            $data['mac_address'] ?? null,
-            $request->ip(),
+        return DeviceResource::collection(
+            Device::query()->with('cabinet')->orderBy('serial')->get()
         );
-
-        return new JsonResponse([
-            'pairing_code' => $code,
-            'expires_at' => $enrollment->pairing_code_expires_at?->toIso8601String(),
-            'message' => 'Mostra questo codice sullo schermo. Un operatore lo digitera\' nel pannello, '
-                .'davanti all\'armadio a cui sei montato.',
-        ], JsonResponse::HTTP_ACCEPTED);
     }
 
     /**
-     * 🔑 Il chiosco ritira le credenziali, **una volta sola**.
+     * 📝 Passo 2 — Il tecnico registra il dispositivo, leggendo il serial dall'etichetta.
      *
-     * Finche' nessuno lo ha accoppiato: **409 `pairing_pending`** — il device continua a
-     * mostrare il codice e a riprovare.
+     * L'armadio puo' non esistere ancora: si lega dopo (`attach`), oppure si crea gia' legato.
+     */
+    public function store(Request $request): JsonResponse
+    {
+        $this->authorize('create', Cabinet::class);
+
+        $data = $request->validate([
+            'serial' => ['required', 'string', 'max:64', 'unique:devices,serial'],
+            'model' => ['nullable', 'string', 'max:40'],
+            'cabinet_id' => ['nullable', 'uuid'],
+        ]);
+
+        $cabinet = isset($data['cabinet_id'])
+            ? Cabinet::query()->whereKey($data['cabinet_id'])->firstOrFail()
+            : null;
+
+        /** @var User $user */
+        $user = $request->user();
+
+        $device = $this->provisioning->register(
+            (string) $data['serial'],
+            $data['model'] ?? null,
+            $cabinet,
+            $user,
+        );
+
+        return (new DeviceResource($device))
+            ->response()
+            ->setStatusCode(JsonResponse::HTTP_CREATED);
+    }
+
+    /** 🔗 Passo 3 — Lega il dispositivo all'armadio (se non erano gia' stati creati insieme). */
+    public function attach(Request $request, Device $device): DeviceResource
+    {
+        $data = $request->validate([
+            'cabinet_id' => ['required', 'uuid'],
+        ]);
+
+        $cabinet = Cabinet::query()->whereKey($data['cabinet_id'])->firstOrFail();
+
+        $this->authorize('update', $cabinet);
+
+        /** @var User $user */
+        $user = $request->user();
+
+        return new DeviceResource(
+            $this->provisioning->attachToCabinet($device, $cabinet, $user)->load('cabinet')
+        );
+    }
+
+    /**
+     * ⚡ Passo 4 — **Attiva**. Apre la finestra: il chiosco acceso ritira le sue credenziali.
+     *
+     * ⚠️ **E' anche il bottone della ri-abilitazione.** Il chiosco ha perso la memoria (reflash,
+     * factory reset, OTA finito male)? Stesso click. Nuovo segreto, stesso armadio. **Un solo
+     * gesto da imparare**, non due.
+     */
+    public function activate(Request $request, Device $device): JsonResponse
+    {
+        // Il dispositivo puo' non avere ancora un armadio: in quel caso non c'e' un Cabinet su
+        // cui autorizzare, e si ricade sul permesso generale di gestione. Sara' il servizio a
+        // rifiutare con 409 `device_without_cabinet` — un errore parlante, non un 404 muto.
+        $this->authorizeDevice($device);
+
+        /** @var User $user */
+        $user = $request->user();
+
+        $device = $this->provisioning->activate($device, $user);
+
+        return new JsonResponse([
+            'data' => (new DeviceResource($device))->toArray($request),
+            'activation_expires_at' => $device->activation_expires_at?->toIso8601String(),
+            'message' => 'Attivazione aperta. Accendi il chiosco: ritirera\' le credenziali da solo.',
+        ]);
+    }
+
+    /**
+     * 🔑 Il chiosco ritira le credenziali. Una volta sola, e solo dentro la finestra.
+     *
+     * ⚠️ **Unica rotta non autenticata del sistema** insieme a quelle pubbliche: il chiosco non
+     * ha ancora nulla da esibire, e' venuto a prendersela. Ma non e' un ignoto — il server sa
+     * gia' chi e' quel serial.
      */
     public function credentials(Request $request): JsonResponse
     {
@@ -69,77 +136,32 @@ final class DeviceController
         ]);
 
         return new JsonResponse([
-            'credentials' => $this->provisioning->collectCredentials((string) $data['serial']),
+            'credentials' => $this->provisioning->collectCredentials(
+                (string) $data['serial'],
+                $request->ip(),
+            ),
             'message' => 'Salva queste credenziali. Non verranno consegnate una seconda volta.',
         ]);
     }
 
-    /**
-     * 🔗 L'operatore accoppia il chiosco all'armadio che ha davanti.
-     *
-     * ⚠️ **L'unico punto del sistema in cui si decide quale chiosco comanda quale armadio**, e
-     * per questo passa da un umano che sta **fisicamente davanti a quell'armadio** e legge il
-     * codice **su quello schermo**. Nessun automatismo potrebbe saperlo — e legare il chiosco
-     * all'armadio sbagliato significa aprire l'armadietto di uno sconosciuto a ogni richiesta,
-     * senza che il software possa mai accorgersene.
-     */
-    public function pair(Request $request, Cabinet $cabinet): JsonResponse
+    /** Autorizza sull'armadio del dispositivo, o — se non ne ha ancora uno — sul permesso di gestione. */
+    private function authorizeDevice(Device $device): void
     {
-        $this->authorize('update', $cabinet);
+        $cabinet = $device->cabinet()->first();
 
-        $data = $request->validate([
-            'pairing_code' => ['required', 'string', 'size:6'],
-        ]);
+        if ($cabinet instanceof Cabinet) {
+            $this->authorize('update', $cabinet);
 
-        /** @var User $user */
-        $user = $request->user();
+            return;
+        }
 
-        ['device' => $device, 'credentials' => $credentials] = $this->provisioning->pair(
-            $cabinet,
-            (string) $data['pairing_code'],
-            $user,
-        );
-
-        return new JsonResponse([
-            'data' => (new DeviceResource($device))->toArray($request),
-            'mqtt_client_id' => $credentials['mqtt_client_id'],
-            'message' => 'Chiosco accoppiato. Ritirera\' le credenziali da solo al prossimo tentativo.',
-        ], JsonResponse::HTTP_CREATED);
+        $this->authorize('create', Cabinet::class);
     }
 
-    /**
-     * ♻️ Ri-abilita un chiosco che ha perso le credenziali (reflash, factory reset, OTA finito male).
-     *
-     * ⚠️ Passa da un umano **per costruzione**: il server non puo' distinguere un chiosco che
-     * ha davvero perso la memoria da un impostore che ne conosce il serial. Chi conferma sta
-     * dicendo "quel dispositivo li', quello attaccato a quell'armadio, e' quello vero" — ed e'
-     * l'unico al mondo in grado di dirlo.
-     */
-    public function reissue(Request $request, Device $device): JsonResponse
+    /** ⛔ Revoca: chiosco rubato, guasto, o da sostituire. */
+    public function revoke(Request $request, Device $device): DeviceResource
     {
-        $this->authorize('update', $device->cabinet()->firstOrFail());
-
-        /** @var User $user */
-        $user = $request->user();
-
-        $this->provisioning->reissueCredentials($device, $user);
-
-        return new JsonResponse([
-            'data' => (new DeviceResource($device->refresh()))->toArray($request),
-            'message' => 'Credenziali rigenerate. Il chiosco le ritirera\' al prossimo tentativo.',
-        ]);
-    }
-
-    /**
-     * ⛔ Revoca: chiosco rubato, clonato o sostituito.
-     *
-     * ⚠️ E' la sola difesa reale contro un dispositivo compromesso — il FCV5003 non ha un
-     * secure element, quindi il segreto nella sua memoria e' estraibile da chi ce l'ha in
-     * mano. Non ci si difende: ci si accorge, e si revoca.
-     */
-    public function revoke(Request $request, Device $device): JsonResponse
-    {
-        $this->authorize('update', $device->cabinet()->firstOrFail());
+        $this->authorizeDevice($device);
 
         $data = $request->validate([
             'reason' => ['required', 'string', 'max:255'],
@@ -150,8 +172,6 @@ final class DeviceController
 
         $this->provisioning->revoke($device, $user, (string) $data['reason']);
 
-        return new JsonResponse([
-            'data' => (new DeviceResource($device->refresh()))->toArray($request),
-        ]);
+        return new DeviceResource($device->refresh());
     }
 }

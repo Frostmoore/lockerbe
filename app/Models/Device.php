@@ -12,22 +12,28 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
- * Il FCV5003 fisico. 1:1 col Cabinet.
+ * Il FCV5003: lo schermo avvitato dentro l'armadio.
+ *
+ * ⚠️ Fisicamente **e' un oggetto solo** con l'armadio. Nel database sono due tabelle per un
+ * motivo solo: **l'elettronica si rompe, la lamiera no.** Quando il FCV5003 fuma e lo si
+ * sostituisce, l'armadio — coi suoi vani, le sue sessioni, il suo audit — deve sopravvivere.
+ * Fonderli significherebbe perdere quella storia (o mescolarla fra due dispositivi) a ogni RMA.
  *
  * `mqtt_client_id` e' l'identita' con cui si presentera' al broker (F5), e l'ACL per-device
  * costruita su di essa e' il confine tra clienti sul canale realtime (piano §3.3).
  *
  * @property string $id
  * @property string $tenant_id
- * @property string $cabinet_id
+ * @property string|null $cabinet_id il dispositivo si registra PRIMA dell'armadio
  * @property string $serial
  * @property string $model
  * @property string $mqtt_client_id
  * @property string $status
  * @property Carbon|null $last_seen_at
- * @property Carbon|null $paired_at
- * @property string|null $paired_by
- * @property Carbon|null $reenrollment_requested_at
+ * @property Carbon|null $activation_expires_at
+ * @property string|null $credentials_payload
+ * @property Carbon|null $credentials_delivered_at
+ * @property Carbon|null $activated_at
  */
 class Device extends Model implements TenantScoped
 {
@@ -39,10 +45,23 @@ class Device extends Model implements TenantScoped
         'credential_fingerprint', 'firmware_version', 'ip_address', 'mac_address', 'status',
     ];
 
-    /** Ha chiesto di essere ri-abilitato: si e' ripresentato senza credenziali. */
-    public function needsReenrollment(): bool
+    /**
+     * C'e' una finestra di attivazione aperta?
+     *
+     * ⚠️ E' l'unica condizione in cui il server consegna le credenziali. Fuori dalla finestra,
+     * chiunque bussi con questo serial — foss'anche il chiosco vero — non ottiene niente:
+     * serve che un tecnico prema "Attiva".
+     */
+    public function hasOpenActivationWindow(): bool
     {
-        return $this->reenrollment_requested_at !== null;
+        return $this->activation_expires_at !== null
+            && $this->activation_expires_at->isFuture();
+    }
+
+    /** Registrato dal tecnico, ma il chiosco non si e' ancora fatto vivo. */
+    public function isRegistered(): bool
+    {
+        return $this->status === 'registered';
     }
 
     public function isRevoked(): bool
@@ -63,8 +82,10 @@ class Device extends Model implements TenantScoped
     {
         return [
             'last_seen_at' => 'datetime',
-            'paired_at' => 'datetime',
-            'reenrollment_requested_at' => 'datetime',
+            'activation_expires_at' => 'datetime',
+            'credentials_delivered_at' => 'datetime',
+            'activated_at' => 'datetime',
+            'credentials_payload' => 'encrypted',
         ];
     }
 }
