@@ -304,8 +304,24 @@ async function render() {
                 <button class="big-btn green" id="ok">✅ Simula pagamento OK</button>
                 <button class="big-btn gray"  id="ko">❌ Fallito</button>
             </div>`;
-        $('ok').onclick = async () => { await mockPay(p.id, true);  stato.schermo = 'open'; render(); };
+        $('ok').onclick = async () => { await mockPay(p.id, true);  stato.schermo = 'card'; render(); };
         $('ko').onclick = async () => { await mockPay(p.id, false); stato.schermo = 'home'; stato.sessione = null; render(); };
+        return;
+    }
+
+    if (stato.schermo === 'card') {
+        // ⚠️ E' QUI che la carta diventa lo scontrino del vano.
+        //
+        // Prima questa schermata non esisteva: il cliente pagava col QR e la carta non gli
+        // veniva mai chiesta. Poi premeva "ho finito", la carta risultava sconosciuta, e non
+        // succedeva NIENTE — il vano restava occupato, e dal suo punto di vista il sistema
+        // era rotto.
+        s.innerHTML = `
+            <h1>Pagato ✅</h1>
+            <div class="sub">Ora <b>appoggia la carta</b>: sarà il tuo scontrino.<br>
+            Senza, non potrai riaprire il vano né riconsegnarlo.</div>
+            <div class="qr" style="font-size:64px">🪪</div>
+            <div class="sub">Usa il tap del pannello hardware, qui a destra.</div>`;
         return;
     }
 
@@ -344,8 +360,31 @@ $('btn-ackmode').onclick = (e) => {
 
 $('delay').onchange = (e) => { stato.ritarda = e.target.checked; };
 
-$('btn-tap').onclick     = () => emit({ type: 'identity.presented', token: $('card').value, intent: 'reopen' });
-$('btn-tap-out').onclick = () => emit({ type: 'identity.presented', token: $('card').value, intent: 'checkout' });
+// ⚠️ Il tap della carta dipende da cosa sta chiedendo il chiosco in quel momento.
+//
+// Se sta aspettando la carta del deposito, quel tap e' un `store`: lega la carta alla
+// sessione che sta servendo — e il chiosco dice ANCHE QUALE (`session_id`). Far indovinare
+// al server "la sessione piu' recente" e' cio' che permetteva alla carta di un cliente di
+// aprire il vano di un altro.
+function tap(intent) {
+    if (stato.schermo === 'card') {
+        emit({
+            type: 'identity.presented',
+            token: $('card').value,
+            intent: 'store',
+            session_id: stato.sessione.session_id,
+        });
+
+        stato.schermo = 'open';
+        render();
+        return;
+    }
+
+    emit({ type: 'identity.presented', token: $('card').value, intent });
+}
+
+$('btn-tap').onclick     = () => tap('reopen');
+$('btn-tap-out').onclick = () => tap('checkout');
 
 $('btn-closed').onclick  = () => emit({ type: 'locker.closed', locker: stato.sessione?.locker_number ?? 1 });
 $('btn-lockerr').onclick = () => emit({ type: 'locker.error', locker: stato.sessione?.locker_number ?? 1, error: 'jammed' });

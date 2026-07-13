@@ -166,23 +166,47 @@ final class DeviceEventHandler
             return;
         }
 
-        $session = $this->identities->resolve($token, $cabinet);
-
-        if ($session === null) {
-            // Carta sconosciuta: la si lega alla sessione attiva piu' recente dell'armadio.
-            $target = Session::query()
-                ->where('cabinet_id', $cabinet->id)
-                ->where('status', 'active')
-                ->latest('paid_at')
-                ->first();
-
-            if ($target instanceof Session) {
-                $this->identities->bind($target, $token);
-            }
+        /*
+         * ⚠️ IL DEPOSITO: e' QUI che la carta diventa lo scontrino.
+         *
+         * Prima non era cosi', ed e' il bug che si vedeva dal chiosco: il cliente pagava col
+         * QR e **non gli veniva mai chiesta la carta**. Quando poi premeva "ho finito", la
+         * carta risultava sconosciuta e non succedeva niente — il vano restava occupato, e dal
+         * suo punto di vista il sistema era rotto.
+         *
+         * Il rattoppo di allora era peggio del buco: la carta sconosciuta veniva legata "alla
+         * sessione attiva piu' recente dell'armadio". Con due clienti che depositano di fila,
+         * **la carta del primo apriva il vano del secondo**.
+         *
+         * Ora la carta si presenta al deposito, e il chiosco dice **a quale sessione** —
+         * quella che sta servendo in questo istante, davanti a quella persona. Nessuna
+         * indovinata.
+         */
+        if ($intent === 'store') {
+            $this->legaCarta($cabinet, $token, $payload['session_id'] ?? null);
 
             return;
         }
 
+        $session = $this->identities->resolve($token, $cabinet);
+
+        if (! $session instanceof Session) {
+            // ⚠️ Carta sconosciuta ⇒ **non si apre niente**. E' l'asimmetria (§7.0): davanti a
+            // un dubbio, un vano non si tocca. Finisce nel registro, perche' e' esattamente
+            // cio' che vede il cliente a cui "non succede nulla".
+            $this->audit->log('identity.unmatched', [
+                'cabinet_id' => $cabinet->id,
+                'actor_type' => 'device',
+                'result' => 'fail',
+                'error_code' => 'no_session_for_card',
+                'context' => ['intent' => $intent],
+            ]);
+
+            return;
+        }
+
+        // ⚠️ L'intento e' stato dichiarato **prima** di passare la carta (§7.1), e non si perde
+        // per strada: "ho finito" vuol dire finito.
         if ($intent === 'checkout') {
             $this->sessions->checkout($session);
 
@@ -196,5 +220,48 @@ final class DeviceEventHandler
         if ($identity instanceof Identity) {
             $this->sessions->reopen($session, $identity);
         }
+    }
+
+    /**
+     * Lega la carta alla sessione che il chiosco sta servendo **adesso**.
+     *
+     * ⚠️ La sessione la dice il chiosco (`session_id`): e' lui che, un istante fa, ha mostrato
+     * il QR a quella persona. Farla indovinare al server ("la piu' recente…") e' esattamente
+     * cio' che permetteva alla carta di un cliente di aprire il vano di un altro.
+     *
+     * ⚠️ E la sessione deve essere **di questo armadio** e **senza carta**: un chiosco
+     * compromesso che indicasse una sessione altrui si legherebbe il vano di un altro locale.
+     * L'id arriva dalla rete — non ci si fida, si verifica.
+     */
+    private function legaCarta(Cabinet $cabinet, string $token, mixed $sessionId): void
+    {
+        $session = is_string($sessionId) && $sessionId !== ''
+            ? Session::query()
+                ->where('id', $sessionId)
+                ->where('cabinet_id', $cabinet->id)
+                ->where('status', 'active')
+                ->whereDoesntHave('identities')
+                ->first()
+            : null;
+
+        if (! $session instanceof Session) {
+            $this->audit->log('identity.bind', [
+                'cabinet_id' => $cabinet->id,
+                'actor_type' => 'device',
+                'result' => 'fail',
+                'error_code' => 'no_session_to_bind',
+            ]);
+
+            return;
+        }
+
+        $this->identities->bind($session, $token);
+
+        $this->audit->log('identity.bind', [
+            'cabinet_id' => $cabinet->id,
+            'locker_id' => $session->locker_id,
+            'session_id' => $session->id,
+            'actor_type' => 'device',
+        ]);
     }
 }
