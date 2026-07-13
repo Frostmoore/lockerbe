@@ -33,3 +33,8 @@ Schedule::command('sessions:finalize-checkouts')->everyMinute();
 // ⚠️ Un comando non consegnato non deve restare consegnabile per sempre: e' la garanzia che un
 // `open` emesso e mai partito non riemerga tre ore dopo, aprendo un vano davanti a nessuno.
 Schedule::command('commands:expire-stale')->everyMinute();
+
+// ⚠️ Il server e il device possono divergere: un comando partito e mai eseguito, un ack perso,
+// un riavvio a meta' operazione. Un sistema che apre serrature non puo' credere a se stesso
+// senza mai verificare.
+Schedule::command('cabinets:reconcile')->everyTenMinutes();

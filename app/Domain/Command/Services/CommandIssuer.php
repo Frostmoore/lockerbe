@@ -10,6 +10,7 @@ use App\Events\CommandIssued;
 use App\Models\Command;
 use App\Models\Locker;
 use App\Models\User;
+use App\Mqtt\PublishCommandJob;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -144,6 +145,24 @@ final class CommandIssuer implements CommandDispatcher
             ]);
 
             CommandIssued::dispatch($command);
+
+            /*
+             * ⚠️ La pubblicazione avviene **dopo il commit** e **fuori dalla richiesta HTTP**.
+             *
+             * `afterCommit()`: se pubblicassimo prima e la transazione poi fallisse, avremmo un
+             * comando che viaggia verso il device e che il server non conosce — nessun TTL
+             * applicabile, nessun ack riconoscibile, nessuna traccia. Un fantasma che apre un
+             * vano.
+             *
+             * In coda: il nostro broker, per autenticare chi si connette, **chiama il nostro
+             * server** (le ACL le decidiamo noi, §3.3). Pubblicare dentro la richiesta HTTP
+             * significherebbe aspettare il broker, che sta aspettando noi: **deadlock**. Il job
+             * gira in un processo separato, e il cerchio si spezza. Vedi PublishCommandJob.
+             *
+             * Se il comando non parte, resta `pending` e scade da solo: meglio un comando mai
+             * partito che un comando partito quando non doveva.
+             */
+            PublishCommandJob::dispatch($command->id, $command->tenant_id)->afterCommit();
 
             return $command->id;
         });

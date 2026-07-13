@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
+use Laravel\Sanctum\HasApiTokens;
 
 /**
  * Il FCV5003: lo schermo avvitato dentro l'armadio.
@@ -39,7 +40,7 @@ use Illuminate\Support\Carbon;
 class Device extends Model implements TenantScoped
 {
     /** @use HasFactory<DeviceFactory> */
-    use BelongsToTenant, HasFactory, HasUuids;
+    use BelongsToTenant, HasApiTokens, HasFactory, HasUuids;
 
     protected $fillable = [
         'cabinet_id', 'serial', 'model', 'mqtt_client_id',

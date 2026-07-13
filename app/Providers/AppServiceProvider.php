@@ -9,6 +9,8 @@ use App\Domain\Identity\Providers\MockIdentityProvider;
 use App\Domain\Payment\Contracts\PaymentProvider;
 use App\Domain\Payment\Providers\MockPaymentProvider;
 use App\Domain\Tenancy\TenantContext;
+use App\Mqtt\CommandPublisher;
+use App\Mqtt\NullCommandPublisher;
 use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -59,6 +61,21 @@ class AppServiceProvider extends ServiceProvider
          * motivo per cui in F3 la firma del contratto era gia' quella definitiva.
          */
         $this->app->bind(CommandDispatcher::class, CommandIssuer::class);
+
+        /*
+         * ⚠️ Nei test non si parla col broker.
+         *
+         * Sarebbero lenti e capricciosi — e un test capriccioso finisce per essere ignorato,
+         * che e' il modo peggiore in cui una suite smette di proteggerti. Qui il comando resta
+         * `pending`, esattamente come se il broker non avesse risposto: che e' anche lo stato
+         * che i test sulla scadenza (§17.2) vogliono osservare.
+         *
+         * Il publisher vero si verifica **a mano, contro un broker vero**. E' l'unico modo
+         * onesto di verificarlo.
+         */
+        if ($this->app->runningUnitTests()) {
+            $this->app->bind(CommandPublisher::class, NullCommandPublisher::class);
+        }
     }
 
     public function boot(): void

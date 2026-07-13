@@ -1,9 +1,33 @@
 # Infra di sviluppo per lockerbe.
 #
 # Postgres è obbligatorio (non SQLite): serve la Row Level Security (piano §3.2).
-# In F5 qui si aggiungerà il broker MQTT (mosquitto) con listener TLS + WebSocket.
 
 services:
+  # ═══ IL BROKER MQTT (F5) ═══
+  #
+  # Non è mosquitto "liscio": è mosquitto con il plugin **go-auth**, configurato per
+  # chiedere al NOSTRO SERVER, via HTTP, chi può connettersi e chi può pubblicare dove.
+  #
+  # ⚠️ Perché non i classici file `passwd` + `acl`: perché le credenziali dei chioschi
+  # nascono a runtime (quando il tecnico preme "Attiva") e muoiono a runtime (quando si
+  # revoca un chiosco rubato). Con file statici, una revoca avrebbe effetto solo dopo un
+  # rigenera-e-ricarica — cioè, in pratica, "quando qualcuno se ne ricorda".
+  #
+  # Chiedendo al server, invece, la **revoca ha effetto immediato**: il chiosco revocato non
+  # si connette più, punto. Era il debito che F5 doveva chiudere.
+  mosquitto:
+    image: iegomez/mosquitto-go-auth:latest
+    container_name: locker-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"    # MQTT (device)
+      - "9001:9001"    # WebSocket (l'emulatore, che gira nel browser)
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf:ro
+    extra_hosts:
+      # Il broker deve poter chiamare il nostro Laravel, che gira sull'host (php artisan serve).
+      - "host.docker.internal:host-gateway"
+
   postgres:
     image: postgres:16-alpine
     container_name: locker-postgres

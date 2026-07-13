@@ -4,9 +4,11 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CabinetController;
 use App\Http\Controllers\Api\V1\CommandController;
 use App\Http\Controllers\Api\V1\DeviceController;
+use App\Http\Controllers\Api\V1\KioskController;
 use App\Http\Controllers\Api\V1\LockerController;
 use App\Http\Controllers\Api\V1\MfaController;
 use App\Http\Controllers\Api\V1\MockController;
+use App\Http\Controllers\Api\V1\MqttAuthController;
 use App\Http\Controllers\Api\V1\PlatformSettingController;
 use App\Http\Controllers\Api\V1\PublicSessionController;
 use App\Http\Controllers\Api\V1\SessionController;
@@ -116,6 +118,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
 });
 
 /*
+ * ⚠️ IL BROKER CHE CI CHIEDE CHI PUO' FARE COSA (piano §3.3, §9).
+ *
+ * Non autenticate: il broker non ha un token. Sono **interne**, e in produzione vanno
+ * raggiungibili solo dalla sua rete.
+ *
+ * ⚠️ Sono il confine tra clienti sul canale realtime. Un chiosco che potesse sottoscrivere
+ * `locker/#` riceverebbe — quindi eseguirebbe — i comandi di apertura di TUTTI gli armadi di
+ * TUTTI i locali. Il broker chiede a noi, e noi diciamo no.
+ */
+Route::prefix('mqtt')->group(function (): void {
+    Route::post('user', [MqttAuthController::class, 'user']);
+    Route::post('superuser', [MqttAuthController::class, 'superuser']);
+    Route::post('acl', [MqttAuthController::class, 'acl']);
+});
+
+/*
  * IL CHIOSCO CHE RITIRA LE PROPRIE CREDENZIALI.
  *
  * ⚠️ Non autenticata, e non poteva essere altrimenti: il chiosco non ha ancora nulla da
@@ -127,6 +145,22 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
  */
 Route::post('devices/credentials', [DeviceController::class, 'credentials'])
     ->middleware('throttle:20,1');
+
+/*
+ * ⚠️ LE API DEL CHIOSCO — autenticate **come device**, non come persona.
+ *
+ * Il chiosco non ha ruoli ne' permessi: ha un token e un armadio. E il cliente che ci sta
+ * davanti **non ha un account** — non deve fare login per depositare un cappotto.
+ *
+ * ⚠️ Il chiosco agisce **solo sul proprio armadio**, e non lo sceglie: glielo dice la sua
+ * stessa identita' (ResolveTenant + KioskController::cabinetOf). Un chiosco che potesse
+ * indicare un `cabinet_id` a piacere sarebbe un chiosco che, compromesso, apre gli armadi
+ * degli altri.
+ */
+Route::middleware(['auth:sanctum', 'tenant'])->prefix('kiosk')->group(function (): void {
+    Route::get('state', [KioskController::class, 'state']);
+    Route::post('sessions', [KioskController::class, 'requestLocker']);
+});
 
 /*
  * PUBBLICHE — il cliente che ha depositato il cappotto (piano §10).

@@ -3,6 +3,7 @@
 namespace App\Domain\Tenancy\Middleware;
 
 use App\Domain\Tenancy\TenantContext;
+use App\Models\Device;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
@@ -25,10 +26,31 @@ final class ResolveTenant
 
     public function handle(Request $request, Closure $next): Response
     {
-        $user = $request->user();
+        // ⚠️ Da F5 l'attore autenticato puo' essere un **device**, non solo una persona.
+        // Larastan lo deduce dalla config di auth (dove c'e' solo User) e non lo sa: glielo
+        // diciamo qui.
+        /** @var User|Device|null $attore */
+        $attore = $request->user();
 
-        if ($user instanceof User && $user->tenant_id !== null) {
-            $this->context->setTenant($user->tenant_id);
+        if ($attore instanceof User && $attore->tenant_id !== null) {
+            $this->context->setTenant($attore->tenant_id);
+
+            return $next($request);
+        }
+
+        /*
+         * ⚠️ Un DEVICE autenticato (F5).
+         *
+         * Il chiosco non e' una persona: non ha ruoli, non ha permessi, non ha una password.
+         * Ha un token, e appartiene a un armadio, che appartiene a un locale. Il tenant si
+         * ricava da li'.
+         *
+         * Era previsto dal piano fin da F1 ("ResolveTenant risolve il tenant da: utente
+         * Sanctum → device autenticato (F5)"), ed e' cio' che permette al chiosco di creare
+         * sessioni per conto del cliente che ha davanti — senza che il cliente abbia un account.
+         */
+        if ($attore instanceof Device && ! $attore->isRevoked()) {
+            $this->context->setTenant($attore->tenant_id);
         }
 
         return $next($request);

@@ -3,6 +3,7 @@
 use App\Domain\Audit\Console\VerifyAuditChain;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
 use App\Domain\Cabinet\Console\MarkOfflineCabinets;
+use App\Domain\Cabinet\Console\ReconcileCabinetState;
 use App\Domain\Command\Console\ExpireStaleCommands;
 use App\Domain\Command\Exceptions\DeviceOfflineException;
 use App\Domain\Device\Exceptions\PairingException;
@@ -13,6 +14,7 @@ use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Domain\Session\Exceptions\NoLockerAvailableException;
 use App\Domain\Tenancy\Middleware\EstablishTenantContext;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
+use App\Mqtt\Console\MqttListen;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -41,6 +43,8 @@ return Application::configure(basePath: dirname(__DIR__))
         CloseExpiredSessions::class,
         FinalizePendingCheckouts::class,
         ExpireStaleCommands::class,
+        MqttListen::class,
+        ReconcileCabinetState::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // In testa a TUTTO: le policy RLS sono fail-closed, quindi senza contesto non si

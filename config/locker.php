@@ -83,6 +83,24 @@ return [
     ],
 
     /*
+     * MQTT (piano §9) — F5.
+     *
+     * ⚠️ Il server e' un client come gli altri: ha un'identita' e dei permessi, e **non e'
+     * superuser** del broker. Un superuser MQTT scavalcherebbe tutte le ACL, cioe' l'intero
+     * confine tra clienti sul canale realtime.
+     */
+    'mqtt' => [
+        'host' => env('MQTT_HOST', '127.0.0.1'),
+        'port' => (int) env('MQTT_PORT', 1883),
+        'client_id' => env('MQTT_CLIENT_ID', 'locker-server'),
+        'server_username' => env('MQTT_SERVER_USERNAME', 'locker-server'),
+        'server_password' => env('MQTT_SERVER_PASSWORD', 'locker-server-secret'),
+
+        // L'indirizzo che l'EMULATORE (che gira nel browser) usa per raggiungere il broker.
+        'ws_url' => env('MQTT_WS_URL', 'ws://127.0.0.1:9001'),
+    ],
+
+    /*
      * OTA (piano §13) — usato da F7.
      *
      * Un .dpk difettoso pushato a tutti = tutti gli armadi di tutti i clienti
