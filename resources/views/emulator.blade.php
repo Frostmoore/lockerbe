@@ -17,29 +17,173 @@
     <title>Emulatore FCV5003 — {{ $cabinet->code }}</title>
     <script src="/js/mqtt.min.js"></script>
     <style>
-        :root { color-scheme: dark; }
+        /*
+         * ⚠️ IL CHIOSCO E' UN TABLET 7" IN VERTICALE, avvitato al centro di un armadio di
+         * lamiera. Non e' una pagina web su un monitor: e' un pannello alto e stretto, guardato
+         * in piedi, spesso al buio di un locale, spesso da qualcuno che ha fretta.
+         *
+         * Da qui tutte le scelte: **fondo bianco** (uno schermo scuro in un ambiente scuro si
+         * legge peggio, e sporca di riflessi), **contrasti forti**, testo grosso, un'azione per
+         * schermata. La sidebar a destra e' il "ferro" — non esiste sul device vero.
+         */
         * { box-sizing: border-box; }
-        body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-               background: #0f1115; color: #e6e8eb; display: grid;
-               grid-template-columns: 1fr 380px; height: 100vh; }
+
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+            background: #0f1115;                 /* il banco di lavoro, non il chiosco */
+            color: #e6e8eb;
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            height: 100vh;
+        }
         @media (max-width: 900px) { body { grid-template-columns: 1fr; height: auto; } }
 
-        /* ── IL CHIOSCO: quello che vede il cliente ── */
-        #kiosk { display: flex; flex-direction: column; align-items: center; justify-content: center;
-                 padding: 32px; text-align: center; }
-        .brand { position: absolute; top: 20px; left: 24px; font-size: 13px; color: #6b7280; }
-        h1 { font-size: 32px; margin: 0 0 8px; }
-        .sub { color: #9ca3af; margin-bottom: 28px; }
-        .big-btn { font-size: 22px; padding: 22px 44px; border: 0; border-radius: 14px;
-                   background: #2563eb; color: #fff; cursor: pointer; font-weight: 600; }
-        .big-btn:hover { background: #1d4ed8; }
-        .big-btn.green { background: #16a34a; } .big-btn.green:hover { background: #15803d; }
-        .big-btn.gray  { background: #374151; } .big-btn.gray:hover  { background: #4b5563; }
-        .big-btn:disabled { opacity: .4; cursor: not-allowed; }
-        .qr { background: #fff; padding: 16px; border-radius: 12px; margin: 20px auto; }
-        .locker-num { font-size: 84px; font-weight: 800; color: #22c55e; line-height: 1; margin: 12px 0; }
-        .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
-        .free { color: #9ca3af; margin-top: 26px; font-size: 14px; }
+        /* ── IL CHIOSCO: il tablet vero e proprio ────────────────────────────── */
+        #stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .brand {
+            font-size: 12px;
+            color: #6b7280;
+            letter-spacing: .04em;
+        }
+
+        /* Il "vetro": proporzione di un 7" in verticale (10:16). */
+        #kiosk {
+            width: min(440px, 100%);
+            aspect-ratio: 10 / 16;
+            max-height: calc(100vh - 90px);
+            background: #fff;
+            color: #0b1220;
+            border-radius: 22px;
+            border: 10px solid #1b2130;          /* la cornice: il tablet e' avvitato dentro */
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            padding: 28px 22px;
+            text-align: center;
+            overflow-y: auto;
+        }
+
+        /* ── Tipografia: grossa, nera, leggibile in piedi ─────────────────────── */
+        #kiosk h1 {
+            font-size: 34px;
+            font-weight: 800;
+            margin: 0;
+            color: #0b1220;
+            line-height: 1.15;
+        }
+
+        #kiosk .sub {
+            margin: 0;
+            color: #475569;
+            font-size: 16px;
+            line-height: 1.5;
+            max-width: 34ch;
+        }
+
+        #kiosk .free {
+            margin-top: 6px;
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        /* ⚠️ Tasti NEUTRI (quelli che portano avanti): blu scuro, testo bianco. */
+        .big-btn {
+            width: 100%;
+            font-size: 20px;
+            font-weight: 700;
+            padding: 18px 20px;
+            border: 0;
+            border-radius: 14px;
+            background: #14306b;
+            color: #fff;
+            cursor: pointer;
+            line-height: 1.3;
+        }
+        .big-btn:hover { background: #0f2354; }
+        .big-btn:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }
+
+        /* Tasti d'AZIONE / secondari: grigi. */
+        .big-btn.gray { background: #e2e8f0; color: #0b1220; }
+        .big-btn.gray:hover { background: #cbd5e1; }
+
+        .big-btn.green { background: #15803d; }
+        .big-btn.green:hover { background: #166534; }
+        .big-btn.warn  { background: #b45309; }
+        .big-btn.warn:hover { background: #92400e; }
+
+        .row { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+
+        .qr { background: #fff; padding: 10px; border-radius: 12px; border: 1px solid #e2e8f0; }
+
+        .locker-num {
+            font-size: 92px;
+            font-weight: 900;
+            color: #15803d;
+            line-height: 1;
+            margin: 4px 0;
+        }
+
+        /* ⚠️ Il simbolo contactless: e' il linguaggio che il cliente gia' conosce. */
+        .rfid { color: #14306b; }
+        .rfid--wait { animation: onda 1.6s ease-in-out infinite; }
+        @keyframes onda { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+        .avviso {
+            width: 100%;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: #fef3c7;
+            border: 2px solid #f59e0b;
+            color: #78350f;
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1.45;
+        }
+
+        .errore {
+            width: 100%;
+            padding: 16px;
+            border-radius: 12px;
+            background: #fee2e2;
+            border: 2px solid #dc2626;
+            color: #7f1d1d;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        #kiosk input {
+            width: 220px;
+            padding: 14px;
+            font-size: 30px;
+            text-align: center;
+            letter-spacing: 8px;
+            font-family: ui-monospace, Consolas, monospace;
+            border: 2px solid #cbd5e1;
+            border-radius: 12px;
+            background: #f8fafc;
+            color: #0b1220;
+        }
+        #kiosk input:focus { outline: 0; border-color: #14306b; }
 
         /* ── IL PANNELLO "HARDWARE": quello che nella realta' e' fatto di ferro ── */
         #panel { background: #151922; border-left: 1px solid #232a37; padding: 18px;
@@ -68,9 +212,16 @@
 </head>
 <body>
 
-<div id="kiosk">
-    <div class="brand">FCV5003 · {{ $cabinet->name }} ({{ $cabinet->code }}) · <span id="conn"><span class="dot"></span>disconnesso</span></div>
-    <div id="screen"></div>
+<div id="stage">
+    <div class="brand">
+        FCV5003 · 7&Prime; verticale · {{ $cabinet->name }} ({{ $cabinet->code }}) ·
+        <span id="conn"><span class="dot"></span>disconnesso</span>
+    </div>
+
+    {{-- Il vetro del tablet: tutto quello che il cliente vede sta qui dentro. --}}
+    <div id="kiosk">
+        <div id="screen"></div>
+    </div>
 </div>
 
 <div id="panel">
@@ -293,16 +444,35 @@ async function mockPay(paymentId, ok) {
 
 // -- Le schermate del chiosco -------------------------------------------------
 //
-// ⚠️ IL FLUSSO, e il perché è fatto così:
+// ⚠️ E' un TABLET 7" IN VERTICALE, avvitato al centro di un armadio di lamiera. Non e' una
+// pagina web su un monitor: e' un pannello alto e stretto, guardato in piedi, spesso al buio
+// di un locale, spesso da qualcuno che ha fretta. Un'azione per schermata, testo grosso,
+// bottoni larghi quanto lo schermo. Se serve spiegare, si spiega — ma in una frase.
 //
+// ⚠️ IL FLUSSO:
 //   home → metodo → (QR:  paghi sul telefono, lasci l'email, ricevi un CODICE)
 //                 → (NFC: appoggi la carta, il provider restituisce un TOKEN)
 //                 → vano
 //
-// L'IDENTITÀ NASCE DAL PAGAMENTO. Prima non era così: il cliente pagava col QR e non
-// riceveva niente con cui riaprire — poi premeva "ho finito" e non succedeva nulla.
-//
-// E per riaprire o riconsegnare: PRIMA si dichiara l'intento, POI ci si identifica (§7.1).
+// L'IDENTITÀ NASCE DAL PAGAMENTO. E per riaprire o riconsegnare: PRIMA si dichiara l'intento,
+// POI ci si identifica (§7.1).
+
+/**
+ * ⚠️ Il simbolo CONTACTLESS: le onde che tutti riconoscono senza leggere niente.
+ *
+ * E' il linguaggio che il cliente già conosce dal bancomat. Scrivere "NFC" non significa
+ * niente per chi non è del mestiere; questo disegno sì.
+ */
+function rfid(size = 110, classe = '') {
+    return `
+        <svg class="rfid ${classe}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+            <path d="M6.5 5.5a9 9 0 0 1 0 13"/>
+            <path d="M10.5 7.5a5.5 5.5 0 0 1 0 9"/>
+            <path d="M14.5 9.6a2.4 2.4 0 0 1 0 4.8"/>
+            <rect x="2.6" y="3" width="3" height="18" rx="1.2"/>
+        </svg>`;
+}
 
 async function render() {
     const s = $('screen');
@@ -311,15 +481,21 @@ async function render() {
         const st = await api('/state');
         s.innerHTML = `
             <h1>Guardaroba</h1>
-            <div class="sub">Deposita il tuo cappotto in sicurezza</div>
-            <button class="big-btn" id="btn-request" ${st.free === 0 ? 'disabled' : ''}>
-                ${st.free === 0 ? 'Armadio pieno' : 'Prendi un vano'}
-            </button>
+            <p class="sub">Deposita il tuo cappotto in sicurezza</p>
+
+            <div class="row">
+                <button class="big-btn" id="btn-request" ${st.free === 0 ? 'disabled' : ''}>
+                    ${st.free === 0 ? 'Armadio pieno' : 'Prendi un vano'}
+                </button>
+            </div>
+
             <div class="free">${st.free} vani liberi su ${st.total}</div>
-            <div class="row" style="margin-top:18px">
+
+            <div class="row" style="margin-top:22px">
                 <button class="big-btn gray" id="btn-reopen">🔓 Riapri il mio vano</button>
                 <button class="big-btn gray" id="btn-out">🏁 Ho finito</button>
             </div>`;
+
         $('btn-request')?.addEventListener('click', () => { stato.schermo = 'method'; render(); });
 
         // ⚠️ L'intento si dichiara PRIMA di identificarsi: è l'unica cosa che distingue
@@ -332,30 +508,48 @@ async function render() {
     if (stato.schermo === 'method') {
         s.innerHTML = `
             <h1>Come vuoi pagare?</h1>
-            <div class="sub">Il modo in cui paghi decide come riaprirai il vano</div>
-            <div class="row" style="flex-direction:column;gap:10px">
-                <button class="big-btn" id="m-qr">📱 QR — pago col telefono<br>
-                    <small style="font-weight:400;opacity:.8">ricevi un codice per email</small></button>
-                <button class="big-btn" id="m-nfc">💳 Carta — pago qui<br>
-                    <small style="font-weight:400;opacity:.8">la carta stessa riaprirà il vano</small></button>
+            <p class="sub">Il modo in cui paghi decide come riaprirai il vano</p>
+
+            <div class="row">
+                <button class="big-btn" id="m-qr">
+                    📱 Col telefono
+                    <div style="font-size:14px;font-weight:500;opacity:.85;margin-top:4px">
+                        inquadri un QR · ricevi un codice per email
+                    </div>
+                </button>
+
+                <button class="big-btn" id="m-nfc">
+                    ${rfid(28)} Carta o telefono NFC
+                    <div style="font-size:14px;font-weight:500;opacity:.85;margin-top:4px">
+                        appoggi qui · la stessa carta riaprirà il vano
+                    </div>
+                </button>
+
+                <button class="big-btn gray" id="m-back">Indietro</button>
             </div>`;
-        $('m-qr').onclick  = () => chiediVano('qr');
-        $('m-nfc').onclick = () => chiediVano('nfc');
+
+        $('m-qr').onclick   = () => chiediVano('qr');
+        $('m-nfc').onclick  = () => chiediVano('nfc');
+        $('m-back').onclick = () => { stato.schermo = 'home'; render(); };
         return;
     }
 
     if (stato.schermo === 'pay') {
         const p = stato.sessione.payment;
         s.innerHTML = `
-            <h1>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</h1>
-            <div class="sub">Inquadra il QR: si apre una pagina dove paghi e lasci l'email</div>
-            <div class="qr"><img src="${p.qr_svg}" width="200" height="200" alt="QR"></div>
-            <div class="sub" style="font-size:12px;opacity:.7">
-                ⚠️ L'email la chiede la pagina, non il chiosco: digitarla su un touchscreen
-                al buio è un modo affidabile di sbagliarla.
-            </div>
-            <a class="big-btn green" style="display:block;text-decoration:none;text-align:center"
-               href="${p.qr_payload}" target="_blank">Apri la pagina di pagamento (simula il telefono)</a>`;
+            <h1>${(p.amount_cents / 100).toFixed(2).replace('.', ',')} ${p.currency}</h1>
+            <p class="sub">Inquadra il QR col telefono: paghi e lasci la tua email</p>
+
+            <div class="qr"><img src="${p.qr_svg}" width="190" height="190" alt="QR"></div>
+
+            <p class="sub" style="font-size:14px">
+                Ti manderemo per email il <b>codice</b> con cui riaprire il vano.
+            </p>
+
+            <div class="row">
+                <a class="big-btn gray" style="text-decoration:none;text-align:center;display:block"
+                   href="${p.qr_payload}" target="_blank">Apri la pagina (simula il telefono)</a>
+            </div>`;
         attendiPagamento();
         return;
     }
@@ -363,12 +557,17 @@ async function render() {
     if (stato.schermo === 'nfc') {
         const p = stato.sessione.payment;
         s.innerHTML = `
-            <h1>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</h1>
-            <div class="sub">Appoggia la carta per pagare.<br>
-            Sarà anche il tuo scontrino: la stessa carta riaprirà il vano.</div>
-            <div class="qr" style="font-size:64px">💳</div>
-            <div class="sub" style="font-size:12px;opacity:.7">
-                Usa il tap del pannello hardware, qui a destra.
+            <h1>${(p.amount_cents / 100).toFixed(2).replace('.', ',')} ${p.currency}</h1>
+            <p class="sub">Appoggia qui la carta o il telefono</p>
+
+            ${rfid(130, 'rfid--wait')}
+
+            <div class="avviso">
+                ⚠️ Per riaprire il vano dovrai usare
+                <u>LA STESSA CARTA O LO STESSO DISPOSITIVO NFC</u>.
+                <div style="font-weight:500;margin-top:6px">
+                    È il tuo scontrino: senza, non potrai riprenderti la roba da solo.
+                </div>
             </div>`;
         return;
     }
@@ -376,28 +575,38 @@ async function render() {
     if (stato.schermo === 'open') {
         const qr = stato.sessione.payment_method === 'qr';
         s.innerHTML = `
-            <div class="sub">Il tuo vano è</div>
+            <p class="sub" style="margin:0">Il tuo vano è</p>
             <div class="locker-num">${stato.sessione.locker_number}</div>
-            <div class="sub">${qr
-                ? 'Ti abbiamo mandato per email il <b>codice a 6 cifre</b> per riaprirlo.'
-                : 'Riappoggia <b>la stessa carta</b> per riaprirlo o riconsegnarlo.'}</div>
-            <button class="big-btn gray" id="home">Fine</button>`;
+
+            ${qr ? '' : rfid(64)}
+
+            <div class="avviso">
+                ${qr
+                    ? 'Ti abbiamo mandato per email il <u>CODICE A 6 CIFRE</u> per riaprirlo.'
+                    : 'Per riaprirlo usa <u>LA STESSA CARTA O LO STESSO DISPOSITIVO NFC</u>.'}
+            </div>
+
+            <div class="row">
+                <button class="big-btn gray" id="home">Fine</button>
+            </div>`;
         $('home').onclick = () => { stato.schermo = 'home'; stato.sessione = null; render(); };
         return;
     }
 
     if (stato.schermo === 'rifiutata') {
-        // ⚠️ Un messaggio, non un alert: l'alert lo si chiude senza leggerlo, e il cliente resta
+        // ⚠️ Una schermata, non un alert: l'alert lo si chiude senza leggerlo, e il cliente resta
         // convinto che la macchina sia rotta. Qui gli si dice cosa è successo E cosa deve fare.
         s.innerHTML = `
-            <h1 style="color:#f87171">Carta già in uso</h1>
-            <div class="sub" style="max-width:460px">
-                <b>Con una carta si prende un vano solo.</b><br><br>
+            <h1 style="color:#b91c1c">Carta già in uso</h1>
+
+            <div class="errore">
+                <b style="font-size:17px">Con una carta si prende un vano solo.</b><br><br>
                 Questa carta sta già tenendo un vano: riconsegnalo prima di prenderne un altro.<br><br>
-                <span style="opacity:.7">Non ti abbiamo addebitato nulla.</span>
+                <b>Non ti abbiamo addebitato nulla.</b>
             </div>
+
             <div class="row">
-                <button class="big-btn warn" id="r-out" style="background:#b45309">🏁 Riconsegna quel vano</button>
+                <button class="big-btn warn" id="r-out">🏁 Riconsegna quel vano</button>
                 <button class="big-btn gray" id="r-home">Indietro</button>
             </div>`;
         $('r-out').onclick  = () => { stato.intento = 'checkout'; stato.schermo = 'identify'; stato.sessione = null; render(); };
@@ -410,15 +619,21 @@ async function render() {
         // carta: manda una stringa, e il server sa a chi appartiene.
         s.innerHTML = `
             <h1>${stato.intento === 'checkout' ? 'Riconsegna' : 'Riapertura'}</h1>
-            <div class="sub">Appoggia la carta, oppure digita il codice ricevuto per email</div>
-            <input id="codice" inputmode="numeric" maxlength="6" placeholder="000000"
-                   style="width:220px;padding:14px;font-size:32px;text-align:center;letter-spacing:8px;
-                          font-family:ui-monospace,monospace;border-radius:12px;border:1px solid #2f3542;
-                          background:#0f1115;color:#e7e9ee;margin:12px 0">
+
+            ${rfid(84, 'rfid--wait')}
+
+            <p class="sub">
+                Appoggia <b>la stessa carta o lo stesso dispositivo NFC</b><br>
+                oppure digita il codice ricevuto per email
+            </p>
+
+            <input id="codice" inputmode="numeric" maxlength="6" placeholder="000000">
+
             <div class="row">
-                <button class="big-btn green" id="ok-code">Conferma codice</button>
+                <button class="big-btn" id="ok-code">Conferma codice</button>
                 <button class="big-btn gray" id="annulla">Annulla</button>
             </div>`;
+
         $('ok-code').onclick = () => {
             const c = $('codice').value.trim();
             if (c.length !== 6) { alert('Il codice è di 6 cifre.'); return; }
@@ -430,6 +645,7 @@ async function render() {
         return;
     }
 }
+
 
 async function chiediVano(metodo) {
     const r = await api('/sessions', { method: metodo });
