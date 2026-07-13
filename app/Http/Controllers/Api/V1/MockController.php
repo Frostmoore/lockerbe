@@ -2,11 +2,13 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domain\Command\Services\CommandIssuer;
 use App\Domain\Identity\Contracts\IdentityProvider;
 use App\Domain\Payment\Contracts\PaymentProvider;
 use App\Domain\Session\Services\SessionManager;
 use App\Http\Resources\SessionResource;
 use App\Models\Cabinet;
+use App\Models\Command;
 use App\Models\Identity;
 use App\Models\Payment;
 use App\Models\Session;
@@ -35,7 +37,69 @@ final class MockController
         private readonly SessionManager $sessions,
         private readonly PaymentProvider $payments,
         private readonly IdentityProvider $identities,
+        private readonly CommandIssuer $commands,
     ) {}
+
+    /**
+     * 💓 **Simula l'heartbeat del device** → l'armadio risulta online.
+     *
+     * ⚠️ Senza questo, NESSUN comando parte: un armadio che non da' segni di vita non riceve
+     * ordini di apertura (409 `device_offline`), e la cosa e' voluta — e' la difesa contro il
+     * rischio #1 (§8.4). Ma senza un device vero, l'armadio e' offline per sempre, e il sistema
+     * sembra rotto.
+     *
+     * Sara' la prima cosa che sembrera' un bug, e non lo e': e' il primo bottone da premere.
+     */
+    public function heartbeat(Cabinet $cabinet): JsonResponse
+    {
+        $cabinet->forceFill([
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ])->save();
+
+        $cabinet->device()->first()?->forceFill([
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ])->save();
+
+        return new JsonResponse([
+            'data' => [
+                'cabinet' => $cabinet->code,
+                'online' => $cabinet->isOnline(),
+                'last_seen_at' => $cabinet->last_seen_at?->toIso8601String(),
+            ],
+        ]);
+    }
+
+    /**
+     * 📟 **Simula l'ACK del device**: il vano si e' aperto (o non ce l'ha fatta).
+     *
+     * ⚠️ Senza device vero, i comandi resterebbero `pending` fino alla scadenza. Questo bottone
+     * chiude il cerchio — ed e' anche il modo di verificare che un ack **fuori tempo massimo**
+     * non resusciti un comando gia' scaduto.
+     */
+    public function ack(Request $request, Command $command): JsonResponse
+    {
+        $data = $request->validate([
+            'ok' => ['nullable', 'boolean'],
+            'error' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $ok = (bool) ($data['ok'] ?? true);
+
+        $command = $this->commands->ack(
+            $command,
+            $ok,
+            $ok ? ['opened' => true] : ['error' => $data['error'] ?? 'lock_error'],
+        );
+
+        return new JsonResponse([
+            'data' => [
+                'command_id' => $command->id,
+                'status' => $command->fresh()?->status,
+            ],
+        ]);
+    }
 
     /**
      * ✅ Simula pagamento riuscito → la sessione diventa attiva e **il vano si apre**.

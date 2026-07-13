@@ -34,6 +34,7 @@ use Illuminate\Support\Carbon;
  * @property string|null $credentials_payload
  * @property Carbon|null $credentials_delivered_at
  * @property Carbon|null $activated_at
+ * @property string|null $signing_secret
  */
 class Device extends Model implements TenantScoped
 {
@@ -86,6 +87,10 @@ class Device extends Model implements TenantScoped
             'credentials_delivered_at' => 'datetime',
             'activated_at' => 'datetime',
             'credentials_payload' => 'encrypted',
+
+            // ⚠️ Cifrato a riposo: chi rubasse il database senza APP_KEY non potrebbe firmare
+            // comandi validi.
+            'signing_secret' => 'encrypted',
         ];
     }
 }

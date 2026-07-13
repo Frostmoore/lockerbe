@@ -4,6 +4,7 @@ namespace App\Domain\Session\Services;
 
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Command\Contracts\CommandDispatcher;
+use App\Domain\Command\Exceptions\DeviceOfflineException;
 use App\Domain\Locker\Services\LockerInventoryService;
 use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Events\PaymentConfirmed;
@@ -119,7 +120,37 @@ final class SessionManager
             $locker = $session->locker()->firstOrFail();
             $locker->update(['status' => 'occupied', 'last_opened_at' => now()]);
 
-            $commandId = $this->commands->issueOpen($locker, 'store');
+            /*
+             * ⚠️ L'ARMADIO PUO' ESSERE OFFLINE PROPRIO ADESSO — e i soldi sono gia' stati presi.
+             *
+             * E' l'unico punto del sistema in cui un armadio irraggiungibile **non** puo'
+             * semplicemente far fallire l'operazione: il cliente ha pagato. Rifiutare qui
+             * lascerebbe un pagamento incassato senza sessione, cioe' il peggio dei due mondi.
+             *
+             * Quindi la sessione diventa comunque `active` (il vano e' suo, l'ha pagato), ma
+             * **nessun comando viene accodato** — la difesa §8.4 resta intatta: non si promette
+             * un'apertura per dopo. L'apertura fallita finisce nell'audit, il pannello mostra il
+             * vano occupato e non apribile, e il cliente potra' riaprirlo (o lo staff per lui)
+             * appena l'armadio torna.
+             *
+             * In pratica e' un caso di bordo: il chiosco E' l'armadio, quindi se e' spento non
+             * c'e' nessuno li' davanti a pagare. Puo' succedere solo se muore fra il QR mostrato
+             * e il pagamento completato sul telefono.
+             */
+            $commandId = null;
+
+            try {
+                $commandId = $this->commands->issueOpen($locker, 'store');
+            } catch (DeviceOfflineException $e) {
+                $this->audit->log('session.store_open_failed', [
+                    'cabinet_id' => $session->cabinet_id,
+                    'locker_id' => $locker->id,
+                    'session_id' => $session->id,
+                    'result' => 'fail',
+                    'error_code' => 'device_offline',
+                    'context' => ['pagamento_incassato' => true, 'vano_non_aperto' => true],
+                ]);
+            }
 
             $this->audit->log('payment.confirmed', [
                 'cabinet_id' => $session->cabinet_id,

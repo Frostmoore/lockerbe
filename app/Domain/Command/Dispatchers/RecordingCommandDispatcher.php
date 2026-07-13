@@ -27,9 +27,9 @@ final class RecordingCommandDispatcher implements CommandDispatcher
 {
     public function __construct(private readonly AuditLogger $audit) {}
 
-    public function issueOpen(Locker $locker, string $reason): string
+    public function issueOpen(Locker $locker, string $reason, ?string $idempotencyKey = null): string
     {
-        $commandId = (string) Str::uuid7();
+        $commandId = $idempotencyKey ?? (string) Str::uuid7();
 
         $this->audit->log('command.issued', [
             'cabinet_id' => $locker->cabinet_id,

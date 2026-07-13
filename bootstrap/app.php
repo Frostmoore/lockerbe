@@ -3,6 +3,8 @@
 use App\Domain\Audit\Console\VerifyAuditChain;
 use App\Domain\Auth\Middleware\EnsureMfaSatisfied;
 use App\Domain\Cabinet\Console\MarkOfflineCabinets;
+use App\Domain\Command\Console\ExpireStaleCommands;
+use App\Domain\Command\Exceptions\DeviceOfflineException;
 use App\Domain\Device\Exceptions\PairingException;
 use App\Domain\Session\Console\CancelExpiredReservations;
 use App\Domain\Session\Console\CloseExpiredSessions;
@@ -38,6 +40,7 @@ return Application::configure(basePath: dirname(__DIR__))
         CancelExpiredReservations::class,
         CloseExpiredSessions::class,
         FinalizePendingCheckouts::class,
+        ExpireStaleCommands::class,
     ])
     ->withMiddleware(function (Middleware $middleware): void {
         // In testa a TUTTO: le policy RLS sono fail-closed, quindi senza contesto non si
@@ -90,6 +93,19 @@ return Application::configure(basePath: dirname(__DIR__))
              * poterle distinguere da un guasto — e fra loro — senza leggere una stringa in
              * italiano.
              */
+            if ($e instanceof DeviceOfflineException) {
+                // ⚠️ 409, e NESSUN comando creato. Non si accoda una promessa di apertura:
+                // verrebbe consegnata ore dopo, aprendo un vano pieno di roba davanti a
+                // nessuno. E' la difesa piu' importante del sistema (§8.4).
+                return new JsonResponse([
+                    'error' => [
+                        'code' => 'device_offline',
+                        'message' => $e->getMessage(),
+                        'details' => ['cabinet_code' => $e->cabinet->code],
+                    ],
+                ], JsonResponse::HTTP_CONFLICT);
+            }
+
             if ($e instanceof PairingException) {
                 // Codice scaduto, armadio gia' accoppiato, credenziali non ancora pronte:
                 // sono risposte, non guasti. Il chiosco deve poterle distinguere senza

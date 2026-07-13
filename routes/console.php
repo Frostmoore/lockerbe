@@ -29,3 +29,7 @@ Schedule::command('sessions:close-expired')->everyFiveMinutes();
 // ⚠️ Ripiego finche' D5 e' aperta: senza sensore di sportello, un vano riconsegnato non
 // tornerebbe MAI libero. Vedi FinalizePendingCheckouts per il compromesso che accettiamo.
 Schedule::command('sessions:finalize-checkouts')->everyMinute();
+
+// ⚠️ Un comando non consegnato non deve restare consegnabile per sempre: e' la garanzia che un
+// `open` emesso e mai partito non riemerga tre ore dopo, aprendo un vano davanti a nessuno.
+Schedule::command('commands:expire-stale')->everyMinute();

@@ -3,7 +3,7 @@
 namespace App\Providers;
 
 use App\Domain\Command\Contracts\CommandDispatcher;
-use App\Domain\Command\Dispatchers\RecordingCommandDispatcher;
+use App\Domain\Command\Services\CommandIssuer;
 use App\Domain\Identity\Contracts\IdentityProvider;
 use App\Domain\Identity\Providers\MockIdentityProvider;
 use App\Domain\Payment\Contracts\PaymentProvider;
@@ -49,13 +49,16 @@ class AppServiceProvider extends ServiceProvider
         });
 
         /*
-         * ⚠️ In F3 NESSUN comando parte davvero: RecordingCommandDispatcher registra
-         * l'intenzione e basta. Le difese (TTL, idempotenza, rifiuto verso gli armadi
-         * offline) arrivano in F4 — e finche' non ci sono, non si collega l'arma.
+         * ⚠️ F4: L'ARMA E' COLLEGATA.
          *
-         * In F4 si cambia SOLO questa riga: SessionManager non se ne accorgera'.
+         * Fino a F3 qui c'era RecordingCommandDispatcher, che registrava l'intenzione e non
+         * mandava niente a nessuno. Ora c'e' CommandIssuer, che crea comandi veri — con TTL,
+         * idempotenza, firma, e il rifiuto verso gli armadi offline.
+         *
+         * ⚠️ **E' cambiata UNA riga.** SessionManager non se n'e' accorto: e' esattamente il
+         * motivo per cui in F3 la firma del contratto era gia' quella definitiva.
          */
-        $this->app->bind(CommandDispatcher::class, RecordingCommandDispatcher::class);
+        $this->app->bind(CommandDispatcher::class, CommandIssuer::class);
     }
 
     public function boot(): void

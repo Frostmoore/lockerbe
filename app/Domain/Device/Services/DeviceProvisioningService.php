@@ -148,8 +148,13 @@ final class DeviceProvisioningService
             ];
 
             $device->forceFill([
-                // Sul server resta solo l'IMPRONTA del segreto, mai il segreto.
+                // L'impronta serve a VERIFICARE chi bussa.
                 'credential_fingerprint' => hash('sha256', $secret),
+
+                // ⚠️ Il segreto in chiaro (cifrato a riposo con APP_KEY) serve a FIRMARE i
+                // comandi in HMAC: un hash non si puo' usare come chiave. Sono due usi diversi
+                // della stessa credenziale, e ne servono due forme.
+                'signing_secret' => $secret,
                 'credentials_payload' => json_encode($credentials, JSON_THROW_ON_ERROR),
                 'credentials_delivered_at' => null,
                 'activation_expires_at' => now()->addMinutes(self::ACTIVATION_WINDOW_MINUTES),
@@ -261,6 +266,7 @@ final class DeviceProvisioningService
         $device->forceFill([
             'status' => 'revoked',
             'credential_fingerprint' => null,
+            'signing_secret' => null,       // da qui non si firma piu' niente per lui
             'credentials_payload' => null,
             'activation_expires_at' => null,
         ])->save();

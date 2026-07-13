@@ -3,6 +3,7 @@
 use App\Domain\Session\Services\SessionManager;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Cabinet;
+use App\Models\Command;
 use App\Models\Identity;
 use App\Models\Locker;
 use App\Models\Session;
@@ -367,7 +368,7 @@ it('non espone mai il token pubblico nelle letture successive', function () {
         ->and($show->json('data'))->not->toHaveKey('public_token_hash');
 });
 
-it('registra l\'intenzione di apertura ma NON apre niente (F3)', function () {
+it('emette un comando VERO al pagamento, con TTL e scadenza (F4)', function () {
     $created = $this->actingAs($this->staff)
         ->postJson('/api/v1/sessions', ['cabinet_id' => $this->cabinet->id]);
 
@@ -375,10 +376,12 @@ it('registra l\'intenzione di apertura ma NON apre niente (F3)', function () {
         ->postJson("/api/v1/mock/payments/{$created->json('payment.id')}/confirm")
         ->assertOk();
 
-    $command = DB::table('audit_logs')->where('action', 'command.issued')->first();
+    // ⚠️ In F3 qui c'era un finto dispatcher che registrava l'intenzione e non mandava niente.
+    // Da F4 l'arma e' collegata: il comando esiste davvero, con la sua scadenza.
+    $command = Command::query()->firstOrFail();
 
-    // ⚠️ In F3 il dispatcher REGISTRA e basta. Le difese (TTL, idempotenza, rifiuto verso
-    // gli armadi offline) arrivano in F4 — e finche' non ci sono, non si collega l'arma.
-    expect($command)->not->toBeNull()
-        ->and(json_decode((string) $command->context, true)['dispatcher'])->toBe('recording');
+    expect($command->type)->toBe('open')
+        ->and($command->reason)->toBe('store')
+        ->and($command->status)->toBe('pending')
+        ->and($command->expires_at->isFuture())->toBeTrue();
 });

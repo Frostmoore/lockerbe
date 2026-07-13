@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\CabinetController;
+use App\Http\Controllers\Api\V1\CommandController;
 use App\Http\Controllers\Api\V1\DeviceController;
 use App\Http\Controllers\Api\V1\LockerController;
 use App\Http\Controllers\Api\V1\MfaController;
@@ -82,6 +83,24 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function (): void {
         Route::get('lockers/{locker}', [LockerController::class, 'show']);
         Route::patch('lockers/{locker}', [LockerController::class, 'update']);
 
+        /*
+         * ⚠️ L'APERTURA DEI VANI. La superficie piu' pericolosa del sistema.
+         *
+         *   - 202, non 200: il comando e' preso in carico, NON eseguito. L'esito arriva
+         *     con l'ack del device.
+         *   - 409 se l'armadio e' offline, e nessun comando viene creato: non si accoda una
+         *     promessa di apertura (§8.4).
+         *   - Idempotency-Key obbligatoria: un retry di rete non deve aprire due volte.
+         */
+        Route::post('lockers/{locker}/open', [CommandController::class, 'open'])
+            ->middleware('can:locker.open');
+
+        Route::get('commands/{command}', [CommandController::class, 'show']);
+
+        // ⚠️⚠️ Svuota il guardaroba. Non e' di tenant_staff, richiede conferma e motivazione.
+        Route::post('cabinets/{cabinet}/open-all', [CommandController::class, 'openAll'])
+            ->middleware('can:locker.open_all');
+
         // Sessioni (F3).
         Route::get('sessions', [SessionController::class, 'index'])->middleware('can:session.view');
         Route::post('sessions', [SessionController::class, 'store'])->middleware('can:session.view');
@@ -139,5 +158,15 @@ if (MockPanel::enabled()) {
         Route::post('payments/{payment}/confirm', [MockController::class, 'confirmPayment']);
         Route::post('payments/{payment}/fail', [MockController::class, 'failPayment']);
         Route::post('identity/tap', [MockController::class, 'tapCard']);
+
+        /*
+         * IL DEVICE SIMULATO (piano §12.3).
+         *
+         * ⚠️ `heartbeat` e' **il primo bottone da premere**: senza, l'armadio risulta offline e
+         * ogni apertura risponde 409. Sembrera' un bug, e non lo e' — e' la difesa contro il
+         * rischio #1 che fa il suo mestiere.
+         */
+        Route::post('devices/{cabinet}/heartbeat', [MockController::class, 'heartbeat']);
+        Route::post('commands/{command}/ack', [MockController::class, 'ack']);
     });
 }
