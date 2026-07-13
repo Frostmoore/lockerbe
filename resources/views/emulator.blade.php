@@ -14,7 +14,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Emulatore FCV5003 — {{ $cabinet->code }}</title>
+    <title>LockUpWorld — chiosco {{ $cabinet->code }}</title>
     <script src="/js/mqtt.min.js"></script>
     <style>
         /*
@@ -100,11 +100,48 @@
             max-width: 34ch;
         }
 
-        #kiosk .free {
-            margin-top: 6px;
-            color: #64748b;
-            font-size: 14px;
+        /* ⚠️ IL MARCHIO. Il chiosco e' l'unica cosa che il cliente vede del nostro prodotto:
+           il nome sta in alto, grande, e non si muove piu' da li'. */
+        .logo {
+            font-size: 30px;
+            font-weight: 900;
+            letter-spacing: -.02em;
+            color: #0b1220;
+            line-height: 1;
         }
+        .logo span { color: #14306b; }
+        .logo__claim { margin-top: 6px; color: #64748b; font-size: 15px; }
+
+        /*
+         * ⚠️ QUANTI VANI LIBERI. E' l'informazione che il cliente cerca da tre metri di
+         * distanza, prima ancora di avvicinarsi: o c'e' posto, o se ne va. Per questo e' grande
+         * quanto un numero di vano, e non una riga di testo in fondo.
+         *
+         * ⚠️ E si aggiorna DA SOLA (ogni 3 secondi): un altro cliente puo' aver preso l'ultimo
+         * vano mentre questo leggeva. Un contatore fermo e' un contatore che mente — e la
+         * bugia si scopre solo dopo aver premuto il bottone.
+         */
+        .posti {
+            display: flex;
+            align-items: baseline;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 16px;
+            border-radius: 16px;
+            background: #f0fdf4;
+            border: 2px solid #16a34a;
+        }
+        .posti--pieno { background: #fef2f2; border-color: #dc2626; }
+
+        .posti__n { font-size: 46px; font-weight: 900; line-height: 1; color: #15803d; }
+        .posti--pieno .posti__n { color: #b91c1c; }
+        .posti__txt { font-size: 15px; font-weight: 700; color: #166534; }
+        .posti--pieno .posti__txt { color: #7f1d1d; }
+        .posti__tot { font-size: 13px; color: #64748b; font-weight: 500; }
+
+        /* L'immagine del contactless (vedi public/img/nfc.png). */
+        .nfc-img { width: 190px; height: 190px; object-fit: contain; }
 
         /* ⚠️ Tasti NEUTRI (quelli che portano avanti): blu scuro, testo bianco. */
         .big-btn {
@@ -313,7 +350,8 @@ function log(msg, cls = 'l-dim') {
 }
 
 // ── Stato del chiosco ─────────────────────────────────────────────────────────
-let stato = { schermo: 'home', sessione: null, acceso: true, ackOk: true, ritarda: false };
+let stato = { schermo: 'home', sessione: null, acceso: true, ackOk: true, ritarda: false,
+              posti: null, pollPosti: null, pollPagamento: null, intento: 'reopen' };
 
 // ── HMAC: la stessa firma che calcola il server (CommandSigner) ───────────────
 async function firmaValida(cmd) {
@@ -463,6 +501,73 @@ async function mockPay(paymentId, ok) {
  * E' il linguaggio che il cliente già conosce dal bancomat. Scrivere "NFC" non significa
  * niente per chi non è del mestiere; questo disegno sì.
  */
+/**
+ * ⚠️ L'IMMAGINE DEL CONTACTLESS — quella vera, non il disegno.
+ *
+ * Il file va messo in `public/img/nfc.png` (PNG o SVG, sfondo trasparente, quadrata, almeno
+ * 400×400 per non sgranare sul tablet).
+ *
+ * ⚠️ Se il file NON c'è, si ripiega sul simbolo disegnato: una schermata di pagamento con
+ * un'icona rotta è peggio di una senza immagine — il cliente non capisce dove appoggiare la
+ * carta, e non appoggia niente.
+ */
+function immagineNfc() {
+    return `
+        <img src="/img/nfc.png" alt="Appoggia qui la carta" class="nfc-img rfid--wait"
+             onerror="this.outerHTML = rfid(130, 'rfid--wait')">`;
+}
+
+/**
+ * ⚠️ QUANTI VANI LIBERI, adesso.
+ *
+ * È l'informazione che il cliente cerca da tre metri di distanza, prima ancora di avvicinarsi:
+ * o c'è posto, o se ne va.
+ */
+function disegnaPosti() {
+    const box = $('posti');
+    if (!box || !stato.posti) return;
+
+    const liberi = stato.posti.free;
+    const pieno = liberi === 0;
+
+    box.innerHTML = `
+        <div class="posti ${pieno ? 'posti--pieno' : ''}">
+            <div class="posti__n">${liberi}</div>
+            <div>
+                <div class="posti__txt">${pieno ? 'Nessun vano libero' : (liberi === 1 ? 'vano libero' : 'vani liberi')}</div>
+                <div class="posti__tot">su ${stato.posti.total} totali</div>
+            </div>
+        </div>`;
+
+    const btn = $('btn-request');
+    if (btn) {
+        btn.disabled = pieno;
+        btn.textContent = pieno ? 'Armadio pieno' : 'Prendi un vano';
+    }
+}
+
+/**
+ * ⚠️ IL CONTATORE SI AGGIORNA DA SOLO. Un contatore fermo è un contatore che MENTE.
+ *
+ * Il chiosco sta acceso tutta la sera davanti a un armadio che si riempie e si svuota senza
+ * che nessuno tocchi lo schermo: un altro cliente prende l'ultimo vano, lo staff ne mette uno
+ * fuori servizio, qualcuno riconsegna. Se il numero restasse quello del caricamento, il
+ * cliente scoprirebbe la bugia solo *dopo* aver premuto il bottone.
+ */
+function vigilaPosti() {
+    clearInterval(stato.pollPosti);
+
+    stato.pollPosti = setInterval(async () => {
+        if (stato.schermo !== 'home') { clearInterval(stato.pollPosti); return; }
+
+        const st = await api('/state');
+        if (!st || st.free === undefined) return;
+
+        stato.posti = st;
+        disegnaPosti();
+    }, 3000);
+}
+
 function rfid(size = 110, classe = '') {
     return `
         <svg class="rfid ${classe}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"
@@ -479,29 +584,42 @@ async function render() {
 
     if (stato.schermo === 'home') {
         const st = await api('/state');
-        s.innerHTML = `
-            <h1>Guardaroba</h1>
-            <p class="sub">Deposita il tuo cappotto in sicurezza</p>
+        stato.posti = st;
 
-            <div class="row">
-                <button class="big-btn" id="btn-request" ${st.free === 0 ? 'disabled' : ''}>
-                    ${st.free === 0 ? 'Armadio pieno' : 'Prendi un vano'}
-                </button>
+        s.innerHTML = `
+            <div>
+                <div class="logo">Lock<span>Up</span>World</div>
+                <div class="logo__claim">Deposita le tue cose</div>
             </div>
 
-            <div class="free">${st.free} vani liberi su ${st.total}</div>
+            <div id="posti"></div>
 
-            <div class="row" style="margin-top:22px">
+            <div class="row">
+                <button class="big-btn" id="btn-request">Prendi un vano</button>
+            </div>
+
+            <div class="row" style="margin-top:20px">
                 <button class="big-btn gray" id="btn-reopen">🔓 Riapri il mio vano</button>
                 <button class="big-btn gray" id="btn-out">🏁 Ho finito</button>
             </div>`;
 
-        $('btn-request')?.addEventListener('click', () => { stato.schermo = 'method'; render(); });
+        disegnaPosti();
+
+        $('btn-request').onclick = () => {
+            // ⚠️ Il contatore puo' essere vecchio di un istante: un altro cliente puo' aver preso
+            // l'ultimo vano mentre questo leggeva. Il "no" vero lo dice comunque il server, che
+            // non ha vani da assegnare — qui si evita solo di far premere un bottone inutile.
+            if ((stato.posti?.free ?? 0) === 0) return;
+            stato.schermo = 'method';
+            render();
+        };
 
         // ⚠️ L'intento si dichiara PRIMA di identificarsi: è l'unica cosa che distingue
         // "torno a prendere il telefono" da "me ne vado".
         $('btn-reopen').onclick = () => { stato.intento = 'reopen';   stato.schermo = 'identify'; render(); };
         $('btn-out').onclick    = () => { stato.intento = 'checkout'; stato.schermo = 'identify'; render(); };
+
+        vigilaPosti();
         return;
     }
 
@@ -560,7 +678,7 @@ async function render() {
             <h1>${(p.amount_cents / 100).toFixed(2).replace('.', ',')} ${p.currency}</h1>
             <p class="sub">Appoggia qui la carta o il telefono</p>
 
-            ${rfid(130, 'rfid--wait')}
+            ${immagineNfc()}
 
             <div class="avviso">
                 ⚠️ Per riaprire il vano dovrai usare
