@@ -151,6 +151,37 @@
          */
         #kiosk { position: relative; }
 
+        /* ⚠️ Il cartello "sei la seconda scheda". Copre TUTTO: se restasse usabile qualcosa
+           sotto, si continuerebbe a litigare col broker senza capire perche'. */
+        #doppia {
+            display: none;
+            position: fixed; inset: 0; z-index: 9999;
+            background: rgba(8, 10, 14, .92);
+            align-items: center; justify-content: center;
+            padding: 1.5rem;
+        }
+        #doppia.on { display: flex; }
+        .doppia-box {
+            max-width: 460px;
+            background: #fff; color: #12151b;
+            border-radius: 16px; padding: 2rem 1.75rem;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, .45);
+        }
+        .doppia-box h2 { margin: 0 0 .9rem; font-size: 1.2rem; }
+        .doppia-box p { margin: 0 0 .9rem; line-height: 1.6; font-size: .93rem; }
+        .doppia-nota { color: #5b6472; font-size: .85rem !important; }
+        .doppia-box code {
+            font-family: ui-monospace, Consolas, monospace; font-size: .85em;
+            background: #eef1f5; padding: .1em .35em; border-radius: 4px;
+        }
+        #doppia-prendi {
+            width: 100%; margin-top: .5rem; padding: .8rem;
+            background: #1b2a4a; color: #fff;
+            border: 0; border-radius: 10px;
+            font: inherit; font-weight: 600; cursor: pointer;
+        }
+        #doppia-prendi:hover { background: #26395f; }
+
         #btn-settings {
             position: absolute;
             top: 10px;
@@ -335,6 +366,36 @@
 </head>
 <body>
 
+{{--
+    ⚠️ DUE SCHEDE, UN SOLO CHIOSCO.
+
+    L'emulatore si connette al broker col `client_id` DEL DEVICE — come farà il FCV5003, che
+    è una scatola sola. Ma una pagina web si apre quante volte si vuole, e MQTT non ammette
+    due client con lo stesso id: il secondo che arriva **butta fuori il primo**, il primo
+    riconnette e butta fuori il secondo, all'infinito.
+
+    Il risultato che si vede è "il chiosco è offline" — e nel log del broker una sfilza di
+    `New client connected` / `closed its connection` nello stesso secondo. Non c'è niente di
+    rotto: ci sono due schede.
+
+    Invece di lasciarlo succedere in silenzio, lo si dichiara.
+--}}
+<div id="doppia">
+    <div class="doppia-box">
+        <h2>Questo chiosco è già aperto altrove</h2>
+        <p>
+            L'emulatore di <strong>{{ $cabinet->name }}</strong> è aperto in un'altra scheda.
+            Due copie non possono convivere: userebbero lo stesso <code>client_id</code> MQTT e si
+            butterebbero fuori a vicenda — il chiosco risulterebbe <em>offline</em> a entrambe.
+        </p>
+        <p class="doppia-nota">
+            È lo stesso motivo per cui, il giorno in cui qualcuno clonasse un FCV5003, ce ne
+            accorgeremmo: la connessione comincia a sbattere.
+        </p>
+        <button id="doppia-prendi">Usa questa scheda</button>
+    </div>
+</div>
+
 <div id="stage">
     <div class="brand">
         FCV5003 · 7&Prime; verticale · {{ $cabinet->name }} ({{ $cabinet->code }}) ·
@@ -469,8 +530,89 @@ async function firmaValida(cmd) {
     return hex === cmd.sig;
 }
 
+/* ── ⚠️ IL LUCCHETTO FRA SCHEDE ────────────────────────────────────────────────
+ *
+ * MQTT non ammette due client con lo stesso `client_id`: il secondo che si connette **butta
+ * fuori il primo**. Il primo riconnette, butta fuori il secondo, e si va avanti così — nel
+ * log del broker si vede una sfilza di `New client connected` / `closed its connection`
+ * nello stesso secondo, e il chiosco risulta **offline a entrambe le schede**.
+ *
+ * Non è un difetto di MQTT: è la stessa proprietà che, il giorno in cui qualcuno clonasse un
+ * FCV5003, ce lo farebbe notare. Il FCV5003 è una scatola sola; una pagina web no.
+ *
+ * Quindi: una sola scheda per armadio tiene il chiosco. Le altre lo dicono e stanno ferme.
+ *
+ * Il lucchetto vive nel `localStorage` (condiviso fra le schede dello stesso browser) e ha
+ * una **scadenza**: se la scheda che lo teneva viene chiusa di brutto, dopo pochi secondi il
+ * lucchetto è di nuovo libero e nessuno resta chiuso fuori per sempre.
+ */
+const LOCK_KEY = 'lockerfe.lock.' + CFG.clientId;
+const LOCK_TTL = 6000;    // ms senza rinnovo → il lucchetto è considerato abbandonato
+const IO = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+function lockAttuale() {
+    try { return JSON.parse(localStorage.getItem(LOCK_KEY)) ?? null; } catch { return null; }
+}
+
+/** Il lucchetto è mio, di nessuno, o di una scheda che non dà più segni di vita? */
+function lockPrendibile() {
+    const l = lockAttuale();
+    return l === null || l.tab === IO || (Date.now() - l.ts) > LOCK_TTL;
+}
+
+function prendiLock() {
+    localStorage.setItem(LOCK_KEY, JSON.stringify({ tab: IO, ts: Date.now() }));
+}
+
+let client = null;
+let sonoIoIlChiosco = false;
+
+/** Un'altra scheda ha preso il chiosco: mi spengo. Non basta nascondere l'interfaccia —
+ *  se restassi connesso continuerei a litigare col broker. */
+function cedi() {
+    if (!sonoIoIlChiosco) return;
+    sonoIoIlChiosco = false;
+    try { client?.end(true); } catch { /* già chiuso */ }
+    client = null;
+    $('doppia').classList.add('on');
+}
+
+function mqttAvvia() {
+    sonoIoIlChiosco = true;
+    prendiLock();
+    $('doppia').classList.remove('on');
+    connetti();
+}
+
+// Rinnovo del lucchetto + sorveglianza: se me lo porta via un'altra scheda, cedo.
+setInterval(() => {
+    if (!sonoIoIlChiosco) return;
+
+    const l = lockAttuale();
+
+    if (l !== null && l.tab !== IO && (Date.now() - l.ts) <= LOCK_TTL) {
+        log('un\'altra scheda ha preso il chiosco: mi spengo per non litigare col broker', 'l-warn');
+        return cedi();
+    }
+
+    prendiLock();
+}, 2000);
+
+// ⚠️ Rilascio ESPLICITO alla chiusura: senza, riaprire la pagina subito dopo troverebbe il
+//    lucchetto ancora caldo e mostrerebbe "già aperto altrove" per qualche secondo.
+window.addEventListener('beforeunload', () => {
+    const l = lockAttuale();
+    if (l?.tab === IO) localStorage.removeItem(LOCK_KEY);
+});
+
+$('doppia-prendi').addEventListener('click', () => {
+    prendiLock();          // l'altra scheda se ne accorgerà entro 2s e cederà
+    location.reload();     // ⚠️ ricarico: le credenziali MQTT vanno ri-ritirate dal server
+});
+
 // ── MQTT ──────────────────────────────────────────────────────────────────────
-const client = mqtt.connect(CFG.ws, {
+function connetti() {
+client = mqtt.connect(CFG.ws, {
     clientId: CFG.clientId,
     username: CFG.clientId,
     password: CFG.secret,
@@ -500,7 +642,32 @@ client.on('connect', () => {
     heartbeat();
 });
 
-client.on('error', (e) => log('errore MQTT: ' + e.message, 'l-err'));
+/*
+ * ⚠️ SE IL BROKER RIFIUTA LE CREDENZIALI, SI SMETTE — non si ritenta all'infinito.
+ *
+ * `mqtt.js`, di suo, riconnette per sempre. Ma un rifiuto di autenticazione **non passa col
+ * tempo**: le credenziali di questo chiosco sono state sostituite (qualcuno ha ricaricato
+ * l'emulatore, o ha premuto "Attiva" nel pannello) e questa pagina ha in mano un segreto
+ * morto. Continuare a bussare produce solo rumore nei log del broker e un chiosco che sembra
+ * "quasi connesso" per sempre — che è il modo peggiore di essere rotti.
+ *
+ * Si dice cosa è successo e si sta fermi. Il rimedio è ricaricare la pagina.
+ */
+client.on('error', (e) => {
+    const rifiutato = e.code === 4 || e.code === 5;   // 4 = bad credentials, 5 = not authorized
+
+    log('errore MQTT: ' + e.message, 'l-err');
+
+    if (!rifiutato) return;
+
+    log('⛔ il broker ha RIFIUTATO le credenziali: sono state sostituite da un\'altra attivazione.', 'l-err');
+    log('   Ricarica la pagina per ritirarne di nuove.', 'l-warn');
+
+    $('conn').innerHTML = '<span class="dot"></span>credenziali sostituite — ricarica';
+
+    try { client.end(true); } catch { /* già chiusa */ }
+    client = null;
+});
 
 // ── L'ARRIVO DI UN COMANDO: qui vivono le due difese lato device ──────────────
 client.on('message', async (topic, buf) => {
@@ -546,8 +713,13 @@ client.on('message', async (topic, buf) => {
     emit({ type: 'locker.opened', locker: cmd.locker?.number });
     render();
 });
+}   // ← fine di connetti()
 
 function emit(payload) {
+    // ⚠️ `client` è null se ho ceduto il chiosco a un'altra scheda, o se il broker ha
+    //    rifiutato le credenziali. Pubblicare qui esploderebbe e porterebbe giù la pagina.
+    if (!client?.connected) return;
+
     client.publish(CFG.topics.evt, JSON.stringify(payload), { qos: 1, retain: false });
     log('→ ' + payload.type, 'l-out');
 }
@@ -558,10 +730,16 @@ function ack(id, ok, error = null) {
 
 // ── Heartbeat: è ciò che rende l'armadio raggiungibile ────────────────────────
 function heartbeat() {
-    if (!stato.acceso || !client.connected) return;
+    if (!stato.acceso || !client?.connected) return;
     emit({ type: 'heartbeat', fw: '1.0.0-emu', ip: '127.0.0.1' });
 }
 setInterval(heartbeat, 20000);
+
+/* ── L'ACCENSIONE ──────────────────────────────────────────────────────────────
+ * Si parte SOLO se nessun'altra scheda tiene già questo chiosco. Altrimenti si sta fermi e
+ * lo si dice: connettersi comunque significherebbe litigare col broker all'infinito. */
+if (lockPrendibile()) mqttAvvia();
+else $('doppia').classList.add('on');
 
 // ── API del chiosco (autenticato COME DEVICE, non come persona) ───────────────
 async function api(path, body = null) {
@@ -1179,6 +1357,10 @@ $('btn-power').onclick = (e) => {
     stato.acceso = !stato.acceso;
     e.target.className = 'btn ' + (stato.acceso ? 'on' : 'off');
     e.target.textContent = stato.acceso ? 'Chiosco ACCESO — heartbeat attivo' : 'Chiosco SPENTO — nessun heartbeat';
+    // ⚠️ `client` è null se un'altra scheda ha preso il chiosco o se le credenziali sono
+    //    state sostituite: qui esploderebbe, e il bottone porterebbe giù la pagina.
+    if (!client?.connected) { log('non connesso al broker: il bottone non ha nessuno a cui parlare', 'l-warn'); return; }
+
     if (stato.acceso) { client.publish(CFG.topics.status, 'online', { qos: 1, retain: true }); heartbeat(); }
     else { client.publish(CFG.topics.status, 'offline', { qos: 1, retain: true }); log('spento: il server lo saprà subito (LWT)', 'l-warn'); }
 };

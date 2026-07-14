@@ -6,9 +6,29 @@ use App\Http\Controllers\PaymentPageController;
 use App\Http\Middleware\ProtectEmulator;
 use Illuminate\Support\Facades\Route;
 
+/*
+ * LA HOME.
+ *
+ * ⚠️ Non c'è un sito pubblico da mostrare: LockUpWorld è un pannello e un chiosco. La pagina di
+ * benvenuto di Laravel su un dominio in produzione dice una cosa sola — "qui non è ancora
+ * finito niente" — e la dice a chiunque passi.
+ *
+ * ⚠️ La destinazione DIPENDE da chi bussa, e non è un vezzo: i due pannelli si respingono a
+ * vicenda (`User::canAccessPanel()`). Un platform_admin mandato su `/app` prende un 403, e un
+ * gestore di locale mandato su `/admin` pure. Mandare tutti nello stesso posto vorrebbe dire
+ * che metà degli utenti sbatte contro un muro appena atterrato.
+ */
 Route::get('/', function () {
-    return view('welcome');
-});
+    $utente = auth()->user();
+
+    if ($utente === null) {
+        // Chi non è entrato va al pannello dei locali: è quello che useranno quasi tutti.
+        // Filament lo dirotta da sé sul login, e dopo il login lo riporta qui.
+        return redirect('/app');
+    }
+
+    return redirect($utente->isPlatformAdmin() ? '/admin' : '/app');
+})->name('home');
 
 /*
  * ⚠️ L'EMULATORE DEL CHIOSCO.

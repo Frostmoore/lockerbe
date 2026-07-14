@@ -109,7 +109,11 @@ class CabinetResource extends Resource
                 ->helperText('Lascialo vuoto per usare il prezzo del locale.')
                 ->placeholder(fn (): string => number_format(self::tariffaDelLocale() / 100, 2, ',', '.').' (dal locale)')
                 ->formatStateUsing(fn (?int $state): ?string => $state === null ? null : number_format($state / 100, 2, '.', ''))
-                ->dehydrateStateUsing(fn (?string $state): ?int => filled($state) ? (int) round(((float) $state) * 100) : null),
+                ->dehydrateStateUsing(fn (?string $state): ?int => filled($state) ? (int) round(((float) $state) * 100) : null)
+
+                // ⚠️ Il listino è della piattaforma: il gestore del locale lo VEDE (in tabella)
+                //    ma non lo tocca. E il campo nascosto non basta — vedi puoDecidereIlPrezzo().
+                ->visible(fn (): bool => self::puoDecidereIlPrezzo()),
 
             /*
              * ⚠️ QUANTO DURA UNA PRENOTAZIONE. È una decisione **commerciale**, non tecnica —
@@ -144,6 +148,23 @@ class CabinetResource extends Resource
                 ->helperText('Non si imposta a mano: lo dice il chiosco, con il suo heartbeat.')
                 ->visibleOn('edit'),
         ]);
+    }
+
+    /**
+     * ⚠️ **IL LISTINO LO DECIDE LA PIATTAFORMA, NON IL LOCALE.**
+     *
+     * Il prezzo di un vano è la cosa che il gestore del guardaroba incassa e noi fatturiamo: se
+     * potesse ritoccarlo da sé, potrebbe azzerarlo — e la nostra quota con lui. È una decisione
+     * **commerciale della piattaforma**, e vive dove vivono le decisioni della piattaforma.
+     *
+     * ⚠️ Questo metodo governa **sia** la visibilità del campo **sia** ciò che viene salvato
+     * (`CreateCabinet` / `EditCabinet` scartano il prezzo se qui è `false`). Nascondere il campo
+     * e basta non sarebbe sicurezza: una richiesta Livewire costruita a mano lo rimetterebbe
+     * dentro. *(Regola non negoziabile 23.)*
+     */
+    public static function puoDecidereIlPrezzo(): bool
+    {
+        return auth()->user()?->isPlatformAdmin() === true;
     }
 
     /**
