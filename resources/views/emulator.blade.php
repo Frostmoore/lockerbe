@@ -178,11 +178,43 @@
         }
         .tec label { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px;
                      text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
-        .tec input, .tec select {
-            width: 100%; padding: 10px 12px; font-size: 15px;
-            border: 2px solid #cbd5e1; border-radius: 10px;
-            background: #f8fafc; color: #0b1220;
-            letter-spacing: normal; text-align: left; font-family: inherit;
+        /*
+         * ⚠️ I campi del menu tecnico NON sono quelli del cliente.
+         *
+         * Il campo del codice a 6 cifre e' largo 220px, con caratteri enormi e spaziati: e'
+         * fatto per essere colpito col pollice, in piedi, al buio. Qui invece si scrive un SSID
+         * o una password WiFi lunga — roba che va **letta**, non centrata. Larghezza piena,
+         * carattere piccolo, allineamento a sinistra.
+         *
+         * `#kiosk input` ha una specificita' piu' alta di `.tec input` (id + elemento vs classe
+         * + elemento), quindi senza `#kiosk` davanti queste regole verrebbero ignorate in
+         * silenzio — ed e' esattamente cio' che era successo.
+         */
+        #kiosk .tec input,
+        #kiosk .tec select {
+            width: 100%;
+            padding: 11px 12px;
+            font-size: 14px;
+            line-height: 1.3;
+            border: 2px solid #cbd5e1;
+            border-radius: 10px;
+            background: #f8fafc;
+            color: #0b1220;
+            letter-spacing: normal;
+            text-align: left;
+            font-family: inherit;
+        }
+        #kiosk .tec input:focus,
+        #kiosk .tec select:focus { outline: 0; border-color: #14306b; }
+
+        /* Il campo del PIN: pieno anche lui, e monospaziato (una password si conta a occhio). */
+        #kiosk #pin {
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 18px;
+            letter-spacing: 2px;
+            text-align: left;
+            font-family: ui-monospace, Consolas, monospace;
         }
         .tec .riga { display: flex; justify-content: space-between; gap: 10px;
                      padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
@@ -905,10 +937,11 @@ async function renderImpostazioni(s) {
                     : 'Non c\'è ancora un PIN su questo chiosco: scegline uno adesso.'}
             </p>
 
-            <input id="pin" type="password" inputmode="numeric" maxlength="8" placeholder="••••">
+            <input id="pin" type="password" maxlength="64" autocomplete="off"
+                   placeholder="almeno 12 caratteri">
 
             <div class="row">
-                <button class="big-btn" id="pin-ok">${impostato ? 'Entra' : 'Imposta il PIN'}</button>
+                <button class="big-btn" id="pin-ok">${impostato ? 'Entra' : 'Imposta la password'}</button>
                 <button class="big-btn gray" id="pin-annulla">Annulla</button>
             </div>`;
 
@@ -917,14 +950,24 @@ async function renderImpostazioni(s) {
         $('pin-ok').onclick = async () => {
             const pin = $('pin').value.trim();
 
-            if (pin.length < 4) { alert('Il PIN è di almeno 4 cifre.'); return; }
+            /*
+             * ⚠️ ALMENO 12 CARATTERI, e non e' pignoleria.
+             *
+             * Un PIN di 4 cifre sono DIECIMILA combinazioni: davanti a quello schermo, senza
+             * nessun limite di tentativi, si provano tutte in un pomeriggio. E qui non c'e' un
+             * rate limit del server a proteggerci — il controllo avviene sul device, in locale:
+             * chi ci prova non parla con nessuno, prova e basta.
+             *
+             * Lunghezza, quindi. E' l'unica difesa che questo posto puo' avere davvero.
+             */
+            if (pin.length < 12) { alert('Servono almeno 12 caratteri.'); return; }
 
             // ⚠️ Primo avvio: il PIN lo sceglie il tecnico che monta l'armadio. Un PIN di
             // fabbrica uguale per tutti i chioschi sarebbe un PIN che, il giorno che trapela,
             // apre il menu di TUTTI gli armadi installati.
             if (!impostato) {
                 localStorage.setItem(PIN_KEY, await sha256(pin));
-                log('PIN del chiosco impostato', 'l-warn');
+                log('password del chiosco impostata', 'l-warn');
                 stato.sbloccato = true;
                 stato.schermo = 'settings';
                 render();
@@ -932,8 +975,8 @@ async function renderImpostazioni(s) {
             }
 
             if (await sha256(pin) !== localStorage.getItem(PIN_KEY)) {
-                log('PIN sbagliato', 'l-err');
-                alert('PIN sbagliato.');
+                log('password sbagliata', 'l-err');
+                alert('Password sbagliata.');
                 return;
             }
 
@@ -999,7 +1042,7 @@ async function renderImpostazioni(s) {
 
             <div class="row">
                 <button class="big-btn" id="set-salva">Salva</button>
-                <button class="big-btn gray" id="set-pin">Cambia PIN</button>
+                <button class="big-btn gray" id="set-pin">Cambia password</button>
                 <button class="big-btn gray" id="set-esci">Esci</button>
             </div>`;
 
