@@ -91,24 +91,29 @@ final class EmulatorController extends Controller
         $attore = auth()->user() ?? User::query()->whereNotNull('tenant_id')->firstOrFail();
 
         $this->provisioning->activate($device, $attore);
-        $credenziali = $this->provisioning->collectCredentials($device->serial, request()->ip());
 
-        // Il chiosco chiama le API **come device**, non come una persona: non ha ruoli, non ha
-        // permessi, ha un token e un armadio (vedi ResolveTenant).
-        $device->tokens()->delete();
-        $apiToken = $device->createToken('kiosk')->plainTextToken;
+        /*
+         * ⚠️ L'EMULATORE USA ESATTAMENTE LE CREDENZIALI DEL DEVICE VERO. Prima no, e la
+         * differenza aveva nascosto una lacuna grossa.
+         *
+         * Il token delle API HTTP se lo coniava da solo — cosa che poteva permettersi perche'
+         * gira **dentro** il server. Il FCV5003 non ha nessuno che lo faccia per lui, e quel
+         * token non era nel payload di attivazione: il porting si sarebbe fermato li', col
+         * device in mano e il tecnico che aspetta.
+         *
+         * Ora `api_token` e i `topics` arrivano da `collectCredentials()`, cioe' **dalla stessa
+         * porta da cui li ritirera' il chiosco vero**. Se un giorno mancasse di nuovo qualcosa,
+         * l'emulatore si rompe subito — che e' l'unico modo di accorgersene in tempo.
+         */
+        $credenziali = $this->provisioning->collectCredentials($device->serial, request()->ip());
 
         return view('emulator', [
             'cabinet' => $cabinet->load('lockers'),
             'device' => $device->refresh(),
             'credentials' => $credenziali,
-            'apiToken' => $apiToken,
+            'apiToken' => $credenziali['api_token'],
             'wsUrl' => (string) config('locker.mqtt.ws_url'),
-            'topics' => [
-                'cmd' => Topics::command($cabinet),
-                'evt' => Topics::event($cabinet),
-                'status' => Topics::status($cabinet),
-            ],
+            'topics' => $credenziali['topics'],
             'graceSeconds' => (int) config('locker.checkout.grace'),
         ]);
     }

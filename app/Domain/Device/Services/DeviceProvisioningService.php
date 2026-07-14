@@ -4,6 +4,7 @@ namespace App\Domain\Device\Services;
 
 use App\Domain\Audit\AuditLogger;
 use App\Domain\Device\Exceptions\PairingException;
+use App\Domain\Mqtt\Topics;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Cabinet;
 use App\Models\Device;
@@ -140,11 +141,44 @@ final class DeviceProvisioningService
         return DB::transaction(function () use ($device, $by): Device {
             $secret = Str::random(48);
 
+            /*
+             * ⚠️⚠️ I TOKEN VECCHI MUOIONO QUI. Prima, non morivano affatto.
+             *
+             * Il chiosco parla su **due canali**: MQTT (segreto qui sotto) e HTTP (le rotte
+             * `/kiosk/*`, autenticate con un token Sanctum). Riattivare un chiosco cambiava il
+             * segreto MQTT e **lasciava vivo il token HTTP**.
+             *
+             * Cioe': un chiosco rubato veniva revocato sul broker — e continuava a poter
+             * chiedere lo stato dell'armadio, aprire sessioni, annullarle. **Si revocava una
+             * porta e si lasciava l'altra spalancata.**
+             */
+            $device->tokens()->delete();
+
+            $cabinet = $device->cabinet()->firstOrFail();
+
             $credentials = [
                 'device_id' => $device->id,
                 'cabinet_id' => (string) $device->cabinet_id,
                 'mqtt_client_id' => $device->mqtt_client_id,
                 'mqtt_secret' => $secret,
+
+                /*
+                 * ⚠️ IL TOKEN DELLE API HTTP. Prima non c'era, e la mancanza era invisibile:
+                 * l'emulatore se lo coniava da solo (girava dentro il server), il FCV5003 no.
+                 * Il porting si sarebbe fermato qui, col device in mano e il tecnico che aspetta.
+                 */
+                'api_token' => $device->createToken('kiosk')->plainTextToken,
+
+                /*
+                 * ⚠️ I TOPIC, GIA' COMPOSTI. Contengono il `tenant_id`, che il device **non
+                 * conosce** — e non deve indovinare: un topic sbagliato e' un armadio che non
+                 * riceve i comandi, o che riceve quelli di un altro.
+                 */
+                'topics' => [
+                    'cmd' => Topics::command($cabinet),
+                    'evt' => Topics::event($cabinet),
+                    'status' => Topics::status($cabinet),
+                ],
             ];
 
             $device->forceFill([
@@ -182,7 +216,7 @@ final class DeviceProvisioningService
      * ⚠️ Non e' autenticato — non ha ancora nulla da esibire, e' venuto a prendersela. Ma non
      * e' nemmeno un ignoto: il server sa gia' chi e' quel serial, glielo ha detto un tecnico.
      *
-     * @return array<string, string>
+     * @return array{device_id: string, cabinet_id: string, mqtt_client_id: string, mqtt_secret: string, api_token: string, topics: array{cmd: string, evt: string, status: string}}
      */
     public function collectCredentials(string $serial, ?string $ip): array
     {
@@ -233,7 +267,7 @@ final class DeviceProvisioningService
                 );
             }
 
-            /** @var array<string, string> $credentials */
+            /** @var array{device_id: string, cabinet_id: string, mqtt_client_id: string, mqtt_secret: string, api_token: string, topics: array{cmd: string, evt: string, status: string}} $credentials */
             $credentials = json_decode((string) $device->credentials_payload, true, 512, JSON_THROW_ON_ERROR);
 
             $device->forceFill([
@@ -263,6 +297,16 @@ final class DeviceProvisioningService
      */
     public function revoke(Device $device, User $by, string $reason): void
     {
+        /*
+         * ⚠️⚠️ ENTRAMBE LE PORTE, non una sola.
+         *
+         * Il chiosco parla su due canali: MQTT e HTTP. Togliergli il segreto MQTT e lasciargli
+         * il token Sanctum significa revocare un chiosco rubato che **continua a poter chiedere
+         * lo stato dell'armadio, aprire sessioni e annullarle**. Una revoca che lascia
+         * un'entrata aperta e' peggio di nessuna revoca: da' l'impressione di aver risolto.
+         */
+        $device->tokens()->delete();
+
         $device->forceFill([
             'status' => 'revoked',
             'credential_fingerprint' => null,

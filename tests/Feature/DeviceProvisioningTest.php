@@ -1,10 +1,12 @@
 <?php
 
+use App\Domain\Device\Services\DeviceProvisioningService;
 use App\Models\Cabinet;
 use App\Models\Device;
 use App\Models\Tenant;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Support\Facades\Auth;
 
 beforeEach(function () {
     $this->seed(RolesAndPermissionsSeeder::class);
@@ -227,3 +229,103 @@ function registraChiosco(object $test, string $serial): Device
 
     return Device::query()->where('serial', $serial)->firstOrFail();
 }
+
+/*
+ * ═══ LE DUE PORTE DEL CHIOSCO ═══
+ *
+ * ⚠️ Il chiosco parla su DUE canali: MQTT (comandi ed eventi) e HTTP (le rotte /kiosk/*).
+ * Sono due porte diverse, con due credenziali diverse — e vanno aperte e chiuse INSIEME.
+ */
+
+it('⚠️ consegna al chiosco TUTTO cio\' che gli serve: MQTT, token HTTP e topic', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->create();
+    $chiosco = Device::factory()->forCabinet($armadio)->create(['serial' => 'FCV5003-0001']);
+
+    $provisioning = app(DeviceProvisioningService::class);
+    $provisioning->activate($chiosco, $this->admin);
+
+    $cred = $provisioning->collectCredentials('FCV5003-0001', '127.0.0.1');
+
+    /*
+     * ⚠️ IL BUCO CHE QUESTO TEST CHIUDE.
+     *
+     * Il `api_token` non c'era. La mancanza era INVISIBILE, perché l'emulatore se lo coniava
+     * da solo — cosa che poteva permettersi girando DENTRO il server. Il FCV5003 non ha
+     * nessuno che lo faccia per lui: il porting si sarebbe fermato lì, col device in mano e il
+     * tecnico che aspetta.
+     *
+     * Idem i topic: contengono il `tenant_id`, che il device non conosce. Farglielo indovinare
+     * significherebbe un armadio che non riceve i comandi — o che riceve quelli di un altro.
+     */
+    expect($cred)->toHaveKeys(['device_id', 'cabinet_id', 'mqtt_client_id', 'mqtt_secret', 'api_token', 'topics'])
+        ->and($cred['topics'])->toHaveKeys(['cmd', 'evt', 'status'])
+        ->and($cred['topics']['cmd'])->toContain($this->tenant->id)
+        ->and($cred['topics']['cmd'])->toEndWith('/cmd');
+
+    // E il token funziona davvero sulle API del chiosco.
+    $this->withHeader('Authorization', 'Bearer '.$cred['api_token'])
+        ->getJson('/api/v1/kiosk/state')
+        ->assertOk();
+});
+
+it('⚠️⚠️ la REVOCA chiude ENTRAMBE le porte, non solo il broker', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->create();
+    $chiosco = Device::factory()->forCabinet($armadio)->create(['serial' => 'FCV5003-0002']);
+
+    $provisioning = app(DeviceProvisioningService::class);
+    $provisioning->activate($chiosco, $this->admin);
+    $cred = $provisioning->collectCredentials('FCV5003-0002', '127.0.0.1');
+
+    $this->withHeader('Authorization', 'Bearer '.$cred['api_token'])
+        ->getJson('/api/v1/kiosk/state')
+        ->assertOk();
+
+    $provisioning->revoke($chiosco->refresh(), $this->admin, 'rubato');
+
+    /*
+     * ⚠️ TRAPPOLA DEI TEST: la guard di Laravel tiene in CACHE l'utente autenticato fra una
+     * richiesta e l'altra dello stesso test. Senza questa riga, la seconda chiamata riuserebbe
+     * il device gia' risolto e risponderebbe 200 anche col token cancellato — e il test
+     * fallirebbe raccontando una bugia ("la revoca non funziona") su un sistema che funziona.
+     *
+     * Nella vita vera il problema non esiste: ogni richiesta HTTP e' un processo nuovo.
+     */
+    Auth::forgetGuards();
+
+    /*
+     * ⚠️ Prima, la revoca toglieva il segreto MQTT e LASCIAVA VIVO IL TOKEN HTTP.
+     *
+     * Cioè: un chiosco rubato veniva cacciato dal broker — e continuava a poter chiedere lo
+     * stato dell'armadio, aprire sessioni e annullarle. Una revoca che lascia un'entrata aperta
+     * è PEGGIO di nessuna revoca: dà l'impressione di aver risolto.
+     */
+    $this->withHeader('Authorization', 'Bearer '.$cred['api_token'])
+        ->getJson('/api/v1/kiosk/state')
+        ->assertUnauthorized();
+});
+
+it('⚠️ ri-attivare un chiosco INVALIDA il token vecchio', function () {
+    $armadio = Cabinet::factory()->forTenant($this->tenant)->create();
+    $chiosco = Device::factory()->forCabinet($armadio)->create(['serial' => 'FCV5003-0003']);
+
+    $provisioning = app(DeviceProvisioningService::class);
+
+    $provisioning->activate($chiosco, $this->admin);
+    $vecchio = $provisioning->collectCredentials('FCV5003-0003', '127.0.0.1')['api_token'];
+
+    // Il chiosco ha perso la memoria: il tecnico ripreme «Attiva».
+    $provisioning->activate($chiosco->refresh(), $this->admin);
+    $nuovo = $provisioning->collectCredentials('FCV5003-0003', '127.0.0.1')['api_token'];
+
+    // ⚠️ Ri-attivare serve anche quando il chiosco è stato RUBATO e ne montiamo uno nuovo. Se
+    // il token vecchio sopravvivesse, quello rubato continuerebbe a parlare col server.
+    expect($nuovo)->not->toBe($vecchio);
+
+    $this->withHeader('Authorization', 'Bearer '.$vecchio)
+        ->getJson('/api/v1/kiosk/state')
+        ->assertUnauthorized();
+
+    $this->withHeader('Authorization', 'Bearer '.$nuovo)
+        ->getJson('/api/v1/kiosk/state')
+        ->assertOk();
+});
