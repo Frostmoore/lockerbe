@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\EmulatorController;
+use App\Http\Controllers\EmulatorGateController;
 use App\Http\Controllers\PaymentPageController;
+use App\Http\Middleware\ProtectEmulator;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -15,11 +17,28 @@ Route::get('/', function () {
  * il sistema funzionare davvero. Parla al server con lo **stesso identico contratto** del
  * dispositivo vero — stessi topic, stesso payload, stessa verifica di firma e scadenza.
  *
- * Doppio cancello (MockPanel): non esiste in produzione. La pagina riceve le credenziali MQTT
- * del chiosco dentro l'HTML.
+ * ⚠️ **TRE lucchetti, e il terzo e' arrivato tardi.**
+ *
+ *   1. `MockPanel`: `APP_ENV != production` **e** `LOCKER_MOCK_PANEL` acceso;
+ *   2. `ProtectEmulator`: una **password**;
+ *   3. rate limit sui tentativi.
+ *
+ * Il #2 non c'era, e il #1 da solo non bastava: il server vero, su un dominio pubblico, gira
+ * `APP_ENV=staging` con il flag acceso — quindi la pagina era **aperta a chiunque**. E questa
+ * pagina elenca gli armadi di *tutti* i clienti e stampa nell'HTML le credenziali MQTT e il
+ * token API del chiosco (per giunta **ruotandole**, cioe' buttando offline il chiosco vero a
+ * ogni caricamento).
+ *
+ * **Un cancello che dipende da `APP_ENV` protegge dall'ambiente, non dall'attaccante.**
  */
-Route::get('/emulator', [EmulatorController::class, 'index']);
-Route::get('/emulator/{cabinet}', [EmulatorController::class, 'show']);
+Route::post('/emulator/unlock', [EmulatorGateController::class, 'unlock'])
+    ->middleware('throttle:5,1');   // ⚠️ senza, la password si cerca a forza bruta
+
+Route::middleware(ProtectEmulator::class)->group(function (): void {
+    Route::get('/emulator', [EmulatorController::class, 'index']);
+    Route::post('/emulator/lock', [EmulatorGateController::class, 'lock']);
+    Route::get('/emulator/{cabinet}', [EmulatorController::class, 'show']);
+});
 
 /*
  * LA PAGINA DI PAGAMENTO — quella che si apre sul TELEFONO del cliente, inquadrando il QR.
