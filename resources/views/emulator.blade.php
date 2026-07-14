@@ -403,6 +403,19 @@
     </div>
 
     <div class="card">
+        <h3>🔧 Reset di fabbrica</h3>
+        <button class="btn off" id="btn-reset">Dimentica password e configurazione</button>
+        <p class="l-dim" style="font-size:11px;margin:6px 0 0">
+            ⚠️ Sul FCV5003 vero questo è un <b>pulsante fisico</b> (o un jumper) dentro
+            l'armadio: si preme con l'anta aperta. Un reset raggiungibile da software sarebbe
+            un reset che si raggiunge anche da fuori.<br><br>
+            Cancella <b>solo</b> ciò che sta sul device: password del tecnico e configurazione
+            WiFi. ⚠️ <b>Non tocca l'identità</b> — quella vive sul server, e si rifà da lì
+            con «Attiva».
+        </p>
+    </div>
+
+    <div class="card">
         <h3>Seriale del device</h3>
         <div id="log"></div>
     </div>
@@ -1201,6 +1214,31 @@ function appoggiaCarta() {
 }
 
 $('btn-settings').onclick = apriImpostazioni;
+
+/*
+ * ⚠️ IL RESET DI FABBRICA — quello che sul device vero e' un pulsante DENTRO l'armadio.
+ *
+ * Cancella cio' che sta sul device: password del tecnico e configurazione WiFi. Nient'altro.
+ *
+ * ⚠️ NON tocca l'identita' del chiosco — credenziali MQTT, segreto di firma, armadio a cui e'
+ * legato. Quelle vivono sul SERVER, e si rifanno da li' con «Attiva». Un reset che potesse
+ * cancellarle sarebbe un modo per staccare un armadio dal suo locale premendo un tasto.
+ */
+$('btn-reset').onclick = () => {
+    const testo = 'Dimenticare password del tecnico e configurazione WiFi?\n\n'
+        + 'L\'identità del chiosco NON viene toccata: quella sta sul server.';
+
+    if (!confirm(testo)) return;
+
+    localStorage.removeItem(PIN_KEY);
+    localStorage.removeItem(CONF_KEY);
+
+    stato.sbloccato = false;
+    stato.schermo = 'home';
+    render();
+
+    log('reset di fabbrica: password e configurazione dimenticate', 'l-warn');
+};
 
 $('btn-tap').onclick = appoggiaCarta;
 
