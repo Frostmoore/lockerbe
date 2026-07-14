@@ -258,8 +258,16 @@
             margin: 4px 0;
         }
 
-        /* ⚠️ Il simbolo contactless: e' il linguaggio che il cliente gia' conosce. */
+        /*
+         * ⚠️ Il simbolo contactless: e' il linguaggio che il cliente gia' conosce.
+         *
+         * Ne servono DUE versioni. Il logo vero (`/img/nfc.png`) e' **scuro**: sta benissimo
+         * sulle schermate a fondo bianco, e **sparirebbe** dentro un bottone blu scuro. Li' si
+         * usa il simbolo disegnato, in bianco — che e' anche il motivo per cui il disegno resta
+         * nel codice invece di essere buttato via col logo vero.
+         */
         .rfid { color: #14306b; }
+        .rfid--bianco { color: #fff; }
         .rfid--wait { animation: onda 1.6s ease-in-out infinite; }
         @keyframes onda { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
@@ -607,10 +615,17 @@ async function mockPay(paymentId, ok) {
  * un'icona rotta è peggio di una senza immagine — il cliente non capisce dove appoggiare la
  * carta, e non appoggia niente.
  */
-function immagineNfc() {
+function immagineNfc(size = 190, pulsa = true) {
+    const classe = pulsa ? 'rfid--wait' : '';
+
+    // ⚠️ `onerror` → ripiego sul simbolo DISEGNATO. Non è pignoleria: un'icona rotta su una
+    // schermata di pagamento è peggio di nessuna icona — il cliente non capisce dove appoggiare
+    // la carta, e non appoggia niente.
     return `
-        <img src="/img/nfc.png" alt="Appoggia qui la carta" class="nfc-img rfid--wait"
-             onerror="this.outerHTML = rfid(130, 'rfid--wait')">`;
+        <img src="/img/nfc.png" alt="Appoggia qui la carta"
+             style="width:${size}px;height:${size}px;object-fit:contain"
+             class="${classe}"
+             onerror="this.outerHTML = rfid(${size}, '${classe}')">`;
 }
 
 /**
@@ -743,7 +758,7 @@ async function render() {
                 </button>
 
                 <button class="big-btn" id="m-nfc">
-                    ${rfid(28)} Carta o telefono NFC
+                    ${rfid(26, 'rfid--bianco')} Carta o telefono NFC
                     <div style="font-size:14px;font-weight:500;opacity:.85;margin-top:4px">
                         appoggi qui · la stessa carta riaprirà il vano
                     </div>
@@ -812,7 +827,7 @@ async function render() {
             <p class="sub" style="margin:0">Il tuo vano è</p>
             <div class="locker-num">${stato.sessione.locker_number}</div>
 
-            ${qr ? '' : rfid(64)}
+            ${qr ? '' : immagineNfc(76, false)}
 
             <div class="avviso">
                 ${qr
@@ -854,7 +869,7 @@ async function render() {
         s.innerHTML = `
             <h1>${stato.intento === 'checkout' ? 'Riconsegna' : 'Riapertura'}</h1>
 
-            ${rfid(84, 'rfid--wait')}
+            ${immagineNfc(100)}
 
             <p class="sub">
                 Appoggia <b>la stessa carta o lo stesso dispositivo NFC</b><br>
