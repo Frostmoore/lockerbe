@@ -464,6 +464,15 @@
         </select>
 
         <button class="btn" id="btn-closed">Ho richiuso questo sportello</button>
+
+        {{-- ⚠️ L'APERTURA CHE NESSUNO HA ORDINATO.
+             La scheda serrature può aprire un vano senza che il server abbia mandato niente: un
+             tecnico con la chiave, un canale RS-485 azionato a mano — o qualcuno che sta
+             forzando il vano di un cliente. Il device se ne accorge e lo dice, e l'evento
+             arriva SENZA `command_id`: nel registro compare come «aperto a mano».
+             È la riga che si va a cercare quando un cappotto non c'è più. --}}
+        <button class="btn off" id="btn-manuale">🔓 Apri a mano (dalla scheda serrature)</button>
+
         <button class="btn off" id="btn-lockerr">⚠️ Serratura inceppata</button>
         <p class="l-dim" style="font-size:11px;margin:6px 0 0">
             La chiusura è la <b>conferma vera</b> della riconsegna (🔒 D5): senza sensore, il
@@ -710,7 +719,13 @@ client.on('message', async (topic, buf) => {
 
     log(`🔓 vano ${cmd.locker?.number} APERTO (board ${cmd.locker?.board}, ch ${cmd.locker?.channel})`, 'l-out');
     ack(cmd.id, true);
-    emit({ type: 'locker.opened', locker: cmd.locker?.number });
+
+    // ⚠️ `command_id` È IL MANDANTE DELL'APERTURA, e va allegato SEMPRE quando si apre perché
+    //    ce l'hanno ordinato. Senza, il server registra un vano che si è aperto e non sa dire
+    //    chi l'ha aperto — e un'apertura senza mandante, nel registro, vale «aperto a mano».
+    //    Cioè: ogni apertura legittima sembrerebbe una forzatura.
+    emit({ type: 'locker.opened', locker: cmd.locker?.number, command_id: cmd.id });
+
     render();
 });
 }   // ← fine di connetti()
@@ -1445,6 +1460,21 @@ $('btn-tap').onclick = appoggiaCarta;
 const sportello = () => parseInt($('door').value, 10);
 
 $('btn-closed').onclick  = () => emit({ type: 'locker.closed', locker: sportello() });
+
+/* ⚠️ L'APERTURA SENZA MANDANTE.
+ *
+ * Nessun `command_id`: il server non troverà nessun comando dietro questa apertura, e la
+ * registrerà come «aperto a mano». È il caso reale in cui la scheda serrature apre un vano
+ * che il server non ha chiesto — tecnico con la chiave, canale RS-485 azionato a mano, o
+ * qualcuno che sta forzando lo sportello di un cliente.
+ *
+ * Esiste come bottone perché una difesa che non si può provare non è una difesa: senza,
+ * nessuno saprebbe mai come appare quella riga nel registro, finché non serve davvero. */
+$('btn-manuale').onclick = () => {
+    log(`🔓 vano ${sportello()} aperto A MANO — nessun comando dietro`, 'l-warn');
+    emit({ type: 'locker.opened', locker: sportello() });
+};
+
 $('btn-lockerr').onclick = () => emit({ type: 'locker.error', locker: sportello(), error: 'jammed' });
 
 render();

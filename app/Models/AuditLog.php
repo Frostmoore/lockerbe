@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Domain\Tenancy\TenantScope;
 use App\Domain\Tenancy\TenantScoped;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
 
 /**
@@ -47,6 +48,34 @@ class AuditLog extends Model implements TenantScoped
     protected static function booted(): void
     {
         static::addGlobalScope(new TenantScope);
+    }
+
+    /**
+     * ⚠️ Relazione di sola lettura, per **mostrare** una voce: "vano 3" si legge, un uuid no.
+     *
+     * ⚠️ Il vano potrebbe non esistere più (`nullOnDelete` non c'è: l'audit tiene l'uuid anche
+     * se il vano sparisce — è append-only, non insegue le cancellazioni). Quindi è nullable, e
+     * la vista deve reggere il `null`. Un registro che si rompe perché qualcuno ha smontato un
+     * armadio è un registro che non serve proprio quando serve.
+     *
+     * @return BelongsTo<Locker, $this>
+     */
+    public function locker(): BelongsTo
+    {
+        return $this->belongsTo(Locker::class);
+    }
+
+    /**
+     * Il comando dietro questa voce, se ce n'è uno.
+     *
+     * ⚠️ **`null` non vuol dire "non lo so": vuol dire NESSUNO L'HA ORDINATO.** Su un
+     * `locker.opened`, l'assenza di comando è il fatto interessante — è un vano aperto a mano.
+     *
+     * @return BelongsTo<Command, $this>
+     */
+    public function command(): BelongsTo
+    {
+        return $this->belongsTo(Command::class);
     }
 
     /**

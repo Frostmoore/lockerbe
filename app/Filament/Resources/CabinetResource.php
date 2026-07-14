@@ -176,7 +176,7 @@ class CabinetResource extends Resource
      */
     private static function tariffaDelLocale(): int
     {
-        return (int) (self::localeCorrente()?->settings['tariff_cents'] ?? 500);
+        return (int) (self::localeCorrente()?->settings['tariff_cents'] ?? config('locker.tariff.default'));
     }
 
     /** La durata di prenotazione del locale, in secondi. */
@@ -229,7 +229,7 @@ class CabinetResource extends Resource
                     ->money('EUR', divideBy: 100)
                     ->placeholder('dal locale')
                     ->description(fn (Cabinet $record): ?string => $record->tariff_cents === null
-                        ? number_format(($record->tenant?->settings['tariff_cents'] ?? 500) / 100, 2, ',', '.').' €'
+                        ? number_format(((int) ($record->tenant?->settings['tariff_cents'] ?? config('locker.tariff.default'))) / 100, 2, ',', '.').' €'
                         : null),
 
                 TextColumn::make('last_seen_at')

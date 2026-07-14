@@ -67,6 +67,22 @@ return [
     ],
 
     /*
+     * Il prezzo di un vano quando NESSUNO ha deciso: né l'armadio, né il locale.
+     *
+     * ⚠️ È l'ultimo anello di `SessionManager::tariffFor()`: armadio → locale → questo.
+     * Ed è il **default di piattaforma**, non "il prezzo": un locale che non lo tocca sta
+     * vendendo a 5 €, e deve essere una scelta, non una dimenticanza.
+     *
+     * ⚠️ Sta qui e non copiato in tre punti del codice, com'era: `SessionManager`,
+     * `CabinetResource` e la tabella degli armadi avevano ciascuno il proprio `?? 500`.
+     * Cambiarne uno e non gli altri avrebbe prodotto un pannello che mostra un prezzo e una
+     * cassa che ne incassa un altro.
+     */
+    'tariff' => [
+        'default' => (int) env('LOCKER_TARIFF_DEFAULT', 500),        // centesimi
+    ],
+
+    /*
      * Durata della prenotazione del vano prima del pagamento (§7.1).
      * Scaduta: sessione `cancelled`, vano di nuovo `free`.
      */

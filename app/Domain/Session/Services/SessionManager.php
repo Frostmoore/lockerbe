@@ -578,7 +578,7 @@ final class SessionManager
 
         $tenant = $cabinet->tenant()->firstOrFail();
 
-        return (int) ($tenant->settings['tariff_cents'] ?? 500);
+        return (int) ($tenant->settings['tariff_cents'] ?? config('locker.tariff.default'));
     }
 
     /**

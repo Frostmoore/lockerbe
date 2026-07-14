@@ -140,9 +140,39 @@ final class DeviceEventHandler
             return;
         }
 
+        /*
+         * ⚠️ **QUALE COMANDO HA APERTO QUESTO SPORTELLO — E SE NESSUNO, CHI L'HA APERTO?**
+         *
+         * Il device allega il `command_id` quando apre **perche' glielo e' stato ordinato**. Se
+         * manca, quello sportello si e' aperto **senza che nessuno l'abbia comandato**: o un
+         * tecnico con la chiave, o la scheda serrature azionata a mano — o qualcuno che sta
+         * forzando il vano di un cliente.
+         *
+         * ⚠️ E' precisamente cio' per cui esiste un registro. Un'apertura senza mandante e' la
+         * riga che si va a cercare quando un cappotto non c'e' piu': senza questo campo, tutte
+         * le aperture si somigliano e non si puo' dire **chi**.
+         *
+         * ⚠️ Il `command_id` si **verifica**, non si crede: il device potrebbe (per errore, o
+         * perche' compromesso) allegare l'id di un comando di un altro armadio, e si
+         * attribuirebbe l'apertura a chi non c'entra niente. Se non risulta un comando di
+         * QUESTO armadio, si scarta l'id e si registra come apertura **non comandata** — che e'
+         * la lettura piu' prudente: e' meglio un'apertura "a mano" di troppo che una forzatura
+         * attribuita a un innocente.
+         */
+        $comandoId = null;
+        $dichiarato = $payload['command_id'] ?? null;
+
+        if (is_string($dichiarato) && $dichiarato !== '') {
+            $comandoId = Command::query()
+                ->where('id', $dichiarato)
+                ->where('cabinet_id', $cabinet->id)
+                ->value('id');
+        }
+
         $this->audit->log($tipo, [
             'cabinet_id' => $cabinet->id,
             'locker_id' => $locker->id,
+            'command_id' => $comandoId,
             'actor_type' => 'device',
             'result' => $tipo === 'locker.error' ? 'fail' : 'ok',
             'context' => $payload,

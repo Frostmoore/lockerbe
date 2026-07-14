@@ -383,6 +383,40 @@
 .lk-cmd__esito--failed { color: var(--lk-bad); }
 .lk-cmd__nota { color: var(--lk-bad); }
 
+/* ═══ Le aperture e le chiusure degli sportelli ═══
+ *
+ * Stessa riga degli ordini, ma dice un'altra cosa: non "cosa ho ordinato", ma "cosa è
+ * successo davvero a quello sportello". La colonna dell'evento è più larga perché ci sta
+ * dentro "serratura inceppata", e la nota NON è rossa: qui ci vive il nome di chi ha aperto,
+ * non un errore. */
+.lk-cmd--porta {
+    grid-template-columns: 9rem 5rem 12rem 1fr;
+}
+
+.lk-cmd--porta .lk-cmd__nota { color: var(--lk-text); }
+
+.lk-cmd__esito--apri   { color: var(--lk-info); }
+.lk-cmd__esito--chiudi { color: var(--lk-ok); }
+.lk-cmd__esito--err    { color: var(--lk-bad); }
+
+/* ⚠️ L'APERTURA CHE NESSUNO HA ORDINATO.
+ *
+ * Si evidenzia, e non è vezzo grafico: se avesse lo stesso aspetto delle altre trecento
+ * righe, chi scorre non la vedrebbe — e questa lista esiste esattamente per farla vedere.
+ * Un vano aperto senza comando è un tecnico con la chiave, la scheda serrature azionata a
+ * mano, o qualcuno che sta forzando il vano di un cliente. */
+.lk-cmd--mano {
+    background: color-mix(in srgb, var(--lk-bad) 8%, transparent);
+    border-left: 3px solid var(--lk-bad);
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+}
+
+.lk-mano { color: var(--lk-bad); }
+.lk-dim { color: var(--lk-faint); }
+
+.lk-pag { margin-top: 0.9rem; }
+
 /* ═══════════════════════ IL REGISTRO ═══════════════════════ */
 
 .lk-log {

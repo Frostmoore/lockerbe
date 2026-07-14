@@ -123,4 +123,67 @@
             <p class="lk-mono">Nessun ordine di apertura, ancora.</p>
         @endforelse
     </x-filament::section>
+
+    {{-- ═══ TUTTE LE APERTURE E LE CHIUSURE — E CHI LE HA FATTE ═══
+
+         ⚠️ Non sono i comandi. I comandi sono gli ordini che il server ha MANDATO; questi sono
+         i fatti FISICI che il chiosco ha VISTO. Le due cose non coincidono, ed è tutto il punto:
+         un ordine mai eseguito è una serratura che non ha obbedito — un'apertura senza nessun
+         ordine dietro è un vano che si è aperto e NESSUNO ha comandato. --}}
+    <x-filament::section collapsible>
+        <x-slot name="heading">Aperture e chiusure degli sportelli</x-slot>
+
+        <x-slot name="description">
+            Ogni volta che uno sportello di questo armadio si è aperto o richiuso, e
+            <strong>chi</strong> l'ha fatto. Un'apertura <strong>senza nessun ordine dietro</strong>
+            compare come <em>aperto a mano</em>: è un tecnico con la chiave, la scheda serrature
+            azionata a mano — o qualcuno che sta forzando il vano di un cliente. È la riga che si
+            va a cercare quando un cappotto non c'è più.
+        </x-slot>
+
+        @php($aperture = $this->aperture())
+
+        @forelse ($aperture as $voce)
+            @php($mandante = $this->mandante($voce))
+
+            @php($evento = [
+                'locker.opened' => ['🔓 aperto', 'apri'],
+                'locker.closed' => ['🔒 richiuso', 'chiudi'],
+                'locker.error'  => ['⚠️ serratura inceppata', 'err'],
+            ][$voce->action] ?? [$voce->action, 'apri'])
+
+            {{-- ⚠️ Un'apertura senza mandante si EVIDENZIA. Se avesse lo stesso aspetto di
+                 tutte le altre, chi scorre trecento righe non la vedrebbe — e questa lista
+                 esiste esattamente per farla vedere. --}}
+            @php($sospetta = $voce->action === 'locker.opened' && $mandante === null)
+
+            <div class="lk-cmd lk-cmd--porta @if($sospetta) lk-cmd--mano @endif">
+                <span class="lk-cmd__ora">{{ $voce->created_at->format('d/m H:i:s') }}</span>
+                <span class="lk-cmd__vano">vano {{ $voce->locker?->number ?? '—' }}</span>
+                <span class="lk-cmd__esito lk-cmd__esito--{{ $evento[1] }}">{{ $evento[0] }}</span>
+
+                <span class="lk-cmd__nota">
+                    @if ($voce->action === 'locker.closed')
+                        {{-- Una chiusura non ha un mandante: lo sportello lo richiude il mondo
+                             fisico, non il software. Dirlo è più onesto di un trattino. --}}
+                        <span class="lk-dim">richiuso sullo sportello</span>
+                    @elseif ($mandante === null)
+                        <strong class="lk-mano">aperto a mano</strong>
+                        <span class="lk-dim">— nessun ordine dietro questa apertura</span>
+                    @else
+                        <strong>{{ $mandante['chi'] }}</strong>
+                        <span class="lk-dim">— {{ $mandante['come'] }}</span>
+                    @endif
+                </span>
+            </div>
+        @empty
+            <p class="lk-mono">Nessuno sportello si è ancora mosso.</p>
+        @endforelse
+
+        @if ($aperture->hasPages())
+            <div class="lk-pag">
+                {{ $aperture->links() }}
+            </div>
+        @endif
+    </x-filament::section>
 </x-filament-panels::page>

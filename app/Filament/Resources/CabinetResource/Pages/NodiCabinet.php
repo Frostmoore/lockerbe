@@ -6,6 +6,7 @@ use App\Domain\Audit\AuditLogger;
 use App\Domain\Command\Exceptions\DeviceOfflineException;
 use App\Domain\Command\Services\CommandIssuer;
 use App\Filament\Resources\CabinetResource;
+use App\Models\AuditLog;
 use App\Models\Cabinet;
 use App\Models\Command;
 use App\Models\Locker;
@@ -13,9 +14,11 @@ use App\Models\User;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
+use Livewire\WithPagination;
 
 /**
  * L'ARMADIO VISTO COME UNA MACCHINA: il chiosco al centro, i vani attaccati.
@@ -41,6 +44,7 @@ class NodiCabinet extends Page
      * poi esplode al primo click. Il trait la tiene `Model|int|string` apposta.
      */
     use InteractsWithRecord;
+    use WithPagination;
 
     protected static string $resource = CabinetResource::class;
 
@@ -89,6 +93,92 @@ class NodiCabinet extends Page
             ->limit(15)
             ->get();
     }
+
+    /**
+     * ⚠️ **OGNI APERTURA E OGNI CHIUSURA DI OGNI SPORTELLO — E CHI L'HA FATTA.**
+     *
+     * Non sono i *comandi* (quelli sono gli ordini che il server ha **mandato**): sono i fatti
+     * **fisici** che il chiosco ha **visto**. Le due cose non coincidono, ed è tutto il punto:
+     *
+     *   - un comando mandato e mai eseguito è una serratura che non ha obbedito;
+     *   - **un'apertura senza nessun comando dietro è un vano che si è aperto e nessuno ha
+     *     ordinato** — un tecnico con la chiave, la scheda serrature azionata a mano, o
+     *     qualcuno che sta forzando lo sportello di un cliente.
+     *
+     * Il secondo caso è la riga che si va a cercare quando un cappotto non c'è più, e nel
+     * registro compare come **«aperto a mano»**. Senza il filo `audit.command_id → comando →
+     * mandante`, tutte le aperture si somigliano e non si può dire *chi*.
+     *
+     * ⚠️ Paginato, non troncato: "le ultime 15" andrebbe bene per gli ordini, non per questo.
+     * Chi viene qui sta cercando **una** riga, e potrebbe essere di tre settimane fa.
+     *
+     * @return LengthAwarePaginator<int, AuditLog>
+     */
+    public function aperture(): LengthAwarePaginator
+    {
+        return AuditLog::query()
+            ->where('cabinet_id', $this->armadio()->id)
+            ->whereIn('action', ['locker.opened', 'locker.closed', 'locker.error'])
+            ->whereNotNull('locker_id')
+            ->with(['locker', 'command'])
+            ->orderByDesc('created_at')
+            ->paginate(20, pageName: 'aperture');
+    }
+
+    /**
+     * Chi ha aperto quel vano.
+     *
+     * ⚠️ **`null` non significa "non lo so": significa NESSUNO L'HA ORDINATO.** È la
+     * distinzione che questa pagina esiste per mostrare, e la vista la traduce in «aperto a
+     * mano» — non in un trattino.
+     *
+     * @return array{chi: string, come: string}|null
+     */
+    public function mandante(AuditLog $voce): ?array
+    {
+        // ⚠️ `$voce->command` è già caricato (`->with(['locker', 'command'])`): interrogarlo qui
+        //    con una `find()` farebbe una query per riga — venti righe, venti query, e la pagina
+        //    si aggiorna da sola ogni 5 secondi.
+        $comando = $voce->command;
+
+        if ($comando === null) {
+            return null;   // ⚠️ nessun comando dietro: apertura non ordinata da nessuno.
+        }
+
+        /*
+         * `issued_by_type` dice **da chi** è partito l'ordine, e le due strade sono davvero
+         * diverse:
+         *   - `user`   → una persona ha premuto un bottone nel pannello (o chiamato l'API);
+         *   - `system` → l'ha ordinato il flusso del cliente (ha pagato, ha riappoggiato la
+         *                carta, ha dichiarato di aver finito). Nessun nostro utente c'entra.
+         */
+        if ($comando->issued_by_type === 'user' && $comando->issued_by_id !== null) {
+            $utente = User::withoutGlobalScopes()->find($comando->issued_by_id);
+
+            // ⚠️ L'utente può non esistere più: l'audit tiene l'uuid, non insegue le
+            //    cancellazioni. Ma la riga deve restare leggibile — un registro che diventa
+            //    illeggibile quando qualcuno lascia l'azienda è un registro inutile proprio
+            //    quando serve.
+            return [
+                'chi' => $utente instanceof User ? $utente->name : 'utente rimosso',
+                'come' => self::MOTIVI[$comando->reason] ?? $comando->reason,
+            ];
+        }
+
+        return [
+            'chi' => 'Cliente',
+            'come' => self::MOTIVI[$comando->reason] ?? $comando->reason,
+        ];
+    }
+
+    /** Il `reason` del comando, detto come lo direbbe una persona. */
+    private const MOTIVI = [
+        'store' => 'deposito',
+        'reopen' => 'riapertura',
+        'checkout' => 'riconsegna',
+        'admin' => 'dal pannello',
+        'maintenance' => 'manutenzione',
+    ];
 
     /**
      * ⚠️ APRIRE UN VANO. Il pannello è solo il grilletto: le sicure stanno in `CommandIssuer`

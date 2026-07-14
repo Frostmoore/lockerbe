@@ -61,6 +61,37 @@ class TenantResource extends Resource
             TextInput::make('timezone')->label('Fuso orario')->default('Europe/Rome')->required(),
 
             /*
+             * ⚠️ **IL LISTINO DEL LOCALE** — il prezzo che ereditano tutti gli armadi che non ne
+             * hanno uno proprio (`SessionManager::tariffFor()`: armadio → locale → default di
+             * piattaforma).
+             *
+             * ⚠️ Mancava, e il pannello degli armadi **prometteva una cosa che non esisteva**:
+             * il campo prezzo dell'armadio dice "lascialo vuoto per usare il prezzo del locale",
+             * ma il prezzo del locale non si poteva impostare da nessuna parte. Chi lasciava
+             * vuoto il campo non ereditava il listino del locale — cadeva sul default di
+             * piattaforma (5,00 €) **senza saperlo**.
+             *
+             * ⚠️ Sta in `/admin` e basta, come tutto `TenantResource`: il listino lo decide la
+             * piattaforma, non chi incassa *(regola non negoziabile 25)*.
+             *
+             * In euro qui, in **centesimi** nel database: i float non tengono i soldi.
+             */
+            TextInput::make('settings.tariff_cents')
+                ->label('Prezzo di un vano')
+                ->prefix('€')
+                ->numeric()
+                ->minValue(0)
+                ->step('0.01')
+                ->required()
+                ->helperText('Il prezzo predefinito del locale. Ogni armadio può averne uno proprio che lo scavalca.')
+                ->formatStateUsing(fn (mixed $state): string => number_format(
+                    ((int) ($state ?? config('locker.tariff.default'))) / 100, 2, '.', '',
+                ))
+                ->dehydrateStateUsing(fn (?string $state): int => filled($state)
+                    ? (int) round(((float) $state) * 100)
+                    : (int) config('locker.tariff.default')),
+
+            /*
              * ⚠️ La durata predefinita della prenotazione: la ereditano tutti gli armadi che
              * non ne hanno una propria. È una decisione commerciale — un locale di passaggio la
              * vuole corta, un teatro lunga — e per questo sta qui e non in un file di config.
