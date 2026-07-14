@@ -30,11 +30,27 @@ class CreateCabinet extends CreateRecord
     {
         $vani = (int) ($this->data['locker_count'] ?? 1);
 
-        /** @var array{name: string, code: string} $attributi */
+        /*
+         * ⚠️ Prezzo e durata della prenotazione vanno passati QUI.
+         *
+         * Prima si costruiva `$attributi` con `name` e `code` e basta: il prezzo compilato nel
+         * form finiva nel nulla, l'armadio nasceva **senza tariffa propria** e si metteva a
+         * seguire il listino del locale. Nessun errore, nessun avviso — solo un prezzo diverso
+         * da quello che il tecnico credeva di aver messo, scoperto alla prima cassa.
+         *
+         * ⚠️ E il prezzo si accetta **solo** se chi crea ha il diritto di deciderlo. Il campo,
+         * per un gestore di locale, non è nemmeno visibile — ma una richiesta Livewire
+         * costruita a mano lo rimetterebbe in `$data`. Nascondere non è impedire.
+         */
         $attributi = [
             'name' => (string) $data['name'],
             'code' => (string) $data['code'],
+            'reservation_ttl' => $data['reservation_ttl'] ?? null,
         ];
+
+        if (CabinetResource::puoDecidereIlPrezzo()) {
+            $attributi['tariff_cents'] = $data['tariff_cents'] ?? null;
+        }
 
         $service = app(CabinetService::class);
 
