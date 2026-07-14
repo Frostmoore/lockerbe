@@ -47,6 +47,25 @@ return [
             'password' => env('MAIL_PASSWORD'),
             'timeout' => null,
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+
+            /*
+             * ⚠️ `MAIL_ENCRYPTION=null` NON basta a spegnere il TLS.
+             *
+             * Symfony Mailer tenta comunque uno **STARTTLS opportunistico** se il server lo
+             * annuncia — e il Postfix in ascolto su 127.0.0.1 lo annuncia, con un certificato
+             * **autofirmato**. La verifica del peer fallisce, `stream_socket_enable_crypto()`
+             * esplode, e l'invio muore con *"Unable to connect with STARTTLS"*.
+             *
+             * ⚠️ Mettere `verify_peer = false` **non e' abbassare la guardia**, qui: la
+             * connessione e' verso **il loopback**. Chi potesse intercettare 127.0.0.1 e' gia'
+             * dentro la macchina, e a quel punto un certificato non lo ferma. Verificare
+             * l'identita' di se stessi e' teatro.
+             *
+             * ⚠️ Ma il giorno che si passera' a un **relay esterno** (Brevo, Mailgun, SES),
+             * questa variabile deve tornare a `true`: li' il certificato e' l'unica cosa che
+             * distingue il relay vero da chi si e' messo in mezzo.
+             */
+            'verify_peer' => (bool) env('MAIL_VERIFY_PEER', true),
         ],
 
         'ses' => [

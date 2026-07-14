@@ -64,13 +64,33 @@ return [
             'after_commit' => false,
         ],
 
+        /*
+         * ⚠️⚠️ `after_commit` = TRUE, e non e' un dettaglio: e' una CORSA.
+         *
+         * I job che contano — la pubblicazione di un comando MQTT, l'email col codice d'accesso —
+         * vengono accodati **dentro una transazione**. Con `after_commit = false` finiscono in
+         * Redis **subito**, e un worker (che e' un processo separato, e non aspetta nessuno) puo'
+         * prenderli in mano **prima che la transazione abbia fatto commit**.
+         *
+         * Il job va a cercare nel database il comando, o la sessione, che sta ancora dentro una
+         * transazione non conclusa — e **non lo trova**. Il comando non viene pubblicato: il vano
+         * non si apre, e nel pannello resta un `pending` che nessuno sa spiegare.
+         *
+         * ⚠️ E' una corsa, quindi **funziona quasi sempre**: la transazione e' breve, il worker
+         * di solito arriva dopo. Fallisce sotto carico — cioe' la sera in cui il guardaroba e'
+         * pieno. Il modo peggiore di rompersi.
+         *
+         * Con `after_commit = true`, un job accodato dentro una transazione parte **dopo il
+         * commit**; se la transazione fa rollback, non parte affatto — che e' esattamente giusto:
+         * non si manda un'email per un pagamento che non e' mai avvenuto.
+         */
         'redis' => [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
             'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 90),
             'block_for' => null,
-            'after_commit' => false,
+            'after_commit' => true,
         ],
 
         'deferred' => [

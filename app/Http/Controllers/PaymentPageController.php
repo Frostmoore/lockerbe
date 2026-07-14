@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Domain\Payment\Contracts\PaymentProvider;
+use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Domain\Session\Services\SessionManager;
 use App\Domain\Tenancy\TenantContext;
 use App\Models\Identity;
@@ -86,6 +87,48 @@ final class PaymentPageController extends Controller
             $payment->forceFill(['payload' => $esito->payload])->save();
 
             $this->sessions->confirmPayment($payment);
+
+            return redirect()->route('pay.show', ['token' => $token]);
+        });
+    }
+
+    /**
+     * "Ho cambiato idea": il cliente annulla, **e il vano torna libero subito**.
+     *
+     * ⚠️ Senza questo bottone, chi apriva il QR e ci ripensava lasciava il vano bloccato su
+     * `reserved` fino allo scadere della prenotazione — dieci minuti, per default. In una serata
+     * di punta sono dieci minuti in cui un armadietto **vuoto** risulta occupato, e il cliente
+     * dopo si sente dire che l'armadio e' pieno.
+     *
+     * ⚠️ **Una sessione GIA' PAGATA non si annulla da qui**, e non e' una dimenticanza: ci sono
+     * dentro le cose di qualcuno. Chi ha pagato e vuole indietro la roba fa *checkout*, che apre
+     * lo sportello — non "annulla", che lo libererebbe **con dentro il cappotto**. Il rifiuto
+     * vive in `SessionManager::cancelReservation()`, non qui: e' una regola di dominio, non una
+     * cortesia dell'interfaccia. *(§7.0: un'azione ambigua non deve MAI liberare un vano.)*
+     */
+    public function cancel(string $token): RedirectResponse
+    {
+        $session = $this->sessioneDaToken($token);
+
+        return $this->context->runForTenant($session->tenant_id, function () use ($session, $token): RedirectResponse {
+            try {
+                $this->sessions->cancelReservation($session);
+            } catch (IllegalTransitionException) {
+                /*
+                 * ⚠️ Il rifiuto e' GIUSTO — quel vano ha dentro la roba di qualcuno — ma non deve
+                 * uscire come un **500**.
+                 *
+                 * `IllegalTransitionException` viene tradotta nell'envelope d'errore solo sulle
+                 * rotte API; qui, che e' una pagina web, diventava un crash. Un rifiuto legittimo
+                 * mostrato come un guasto e' il modo migliore per far pensare che il sistema sia
+                 * rotto quando invece si sta difendendo.
+                 *
+                 * Il bottone "annulla", del resto, sulla pagina non c'e' nemmeno piu' una volta
+                 * pagato: chi arriva qui ha una pagina vecchia in mano, o sta forzando. In
+                 * entrambi i casi la risposta giusta e' **mostrargli com'e' la realta' adesso**.
+                 */
+                return redirect()->route('pay.show', ['token' => $token]);
+            }
 
             return redirect()->route('pay.show', ['token' => $token]);
         });

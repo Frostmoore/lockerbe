@@ -72,3 +72,14 @@ Route::get('/pay/{token}', [PaymentPageController::class, 'show'])
 Route::post('/pay/{token}', [PaymentPageController::class, 'pay'])
     ->middleware('throttle:10,1')
     ->name('pay.pay');
+
+/*
+ * ⚠️ "Ho cambiato idea" — e il vano torna libero SUBITO.
+ *
+ * Senza, chi apriva il QR e ci ripensava lasciava il vano bloccato su `reserved` fino allo
+ * scadere della prenotazione: in una serata di punta, un armadietto vuoto che il sistema crede
+ * occupato, e il cliente dopo che si sente dire che l'armadio è pieno.
+ */
+Route::post('/pay/{token}/cancel', [PaymentPageController::class, 'cancel'])
+    ->middleware('throttle:10,1')
+    ->name('pay.cancel');

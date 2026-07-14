@@ -10,6 +10,7 @@ use App\Models\Payment;
 use App\Models\Session;
 use Illuminate\Support\Facades\Mail;
 use Random\RandomException;
+use Throwable;
 
 /**
  * ⚠️ L'IDENTITA' NASCE DAL PAGAMENTO. Non dopo, non "quando capita".
@@ -136,10 +137,13 @@ final class IdentityIssuer
     /**
      * Il codice a 6 cifre, mandato per email.
      *
-     * ⚠️ **Non c'e' ancora un provider di posta**: la mail finisce in
-     * `storage/logs/laravel.log` (`MAIL_MAILER=log`). Il codice e' vero e funziona. Quando ci
-     * sara' un provider **non cambia una riga di questo file**: cambia una variabile
-     * d'ambiente.
+     * ⚠️ **L'email si ACCODA, non si manda qui.** Questo metodo gira dentro la transazione che
+     * conferma il pagamento: mandarla in linea significa legare l'incasso alla salute di un
+     * server SMTP. Vedi il commento accanto alla `Mail::queue()`, qui sotto: e' la ragione di un
+     * bug vero.
+     *
+     * ⚠️ Quando ci sara' un provider di posta esterno (Brevo, Mailgun, SES) **non cambia una
+     * riga di questo file**: cambiano le variabili d'ambiente.
      */
     private function daCodice(Session $session): void
     {
@@ -168,10 +172,43 @@ final class IdentityIssuer
             return;
         }
 
-        Mail::to($email)->send(new CodiceAccesso(
-            codice: $codice,
-            numeroVano: (int) $session->locker()->firstOrFail()->number,
-        ));
+        /*
+         * ⚠️⚠️ **UN'EMAIL NON PUO' ANNULLARE UN PAGAMENTO RIUSCITO.**
+         *
+         * Questo metodo gira **dentro la transazione** di `confirmPayment()`. Prima si mandava
+         * la mail in modo **sincrono**, qui: bastava che l'SMTP tossisse — un certificato
+         * scaduto, il relay giu', la rete lenta — e l'eccezione faceva **rollback di tutto**.
+         *
+         * Il cliente aveva pagato, e si ritrovava: un **500**, nessuna sessione, e il vano
+         * bloccato su `reserved` finche' non scadeva la prenotazione. E' esattamente cosi' che
+         * l'abbiamo trovato in produzione.
+         *
+         * Ora si **accoda** (`queue`), e in piu' si **ingoia qualunque errore**: se nemmeno
+         * l'accodamento riesce (Redis giu'), il pagamento resta valido lo stesso. La consegna
+         * di un'email e' un servizio *accessorio*: non ha nessun diritto di disfare l'incasso.
+         *
+         * ⚠️ E se il codice non parte davvero, il cliente non puo' riaprire il suo vano. Per
+         * questo il fallimento **finisce nel registro** invece di sparire: lo staff lo vede, e
+         * puo' aprirgli il vano dal pannello. Un errore ingoiato in silenzio sarebbe peggio del
+         * 500.
+         */
+        try {
+            Mail::to($email)->queue(new CodiceAccesso(
+                codice: $codice,
+                numeroVano: (int) $session->locker()->firstOrFail()->number,
+            ));
+        } catch (Throwable $e) {
+            $this->audit->log('identity.issue', [
+                'cabinet_id' => $session->cabinet_id,
+                'locker_id' => $session->locker_id,
+                'session_id' => $session->id,
+                'result' => 'fail',
+                'error_code' => 'mail_queue_failed',
+                'context' => ['method' => 'qr', 'email' => $email, 'errore' => $e->getMessage()],
+            ]);
+
+            return;
+        }
 
         // ⚠️ Nel registro finisce che il codice e' stato mandato, **non il codice**. Un audit
         // log che contiene le chiavi di casa e' un audit log che apre i vani.

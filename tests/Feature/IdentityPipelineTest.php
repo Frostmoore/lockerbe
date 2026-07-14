@@ -4,6 +4,15 @@ use App\Domain\Identity\Contracts\IdentityProvider;
 use App\Domain\Session\Services\SessionManager;
 use App\Domain\Tenancy\TenantContext;
 use App\Mail\CodiceAccesso;
+/*
+ * ⚠️ `assertQueued`, non `assertSent`.
+ *
+ * L'email col codice si **accoda**, non si spedisce in linea: parte dentro la transazione che
+ * conferma il pagamento, e un SMTP che tossisce faceva rollback dell'incasso — 500 al cliente e
+ * vano bloccato su `reserved`. (Ci e' successo davvero: vedi `PagamentoQrTest`.)
+ *
+ * Se un giorno qualcuno tornasse a `Mail::send()`, questi test tornerebbero rossi. E' voluto.
+ */
 use App\Models\Cabinet;
 use App\Models\Command;
 use App\Models\Device;
@@ -91,7 +100,7 @@ it('⚠️ manda un codice a 6 cifre per email quando si paga col QR', function 
         // ⚠️ L'identita' esiste GIA': e' nata col pagamento, non con un tap successivo.
         ->and($sessione->identities()->where('type', 'access_code')->count())->toBe(1);
 
-    Mail::assertSent(CodiceAccesso::class, fn (CodiceAccesso $m): bool => $m->hasTo('cliente@esempio.it')
+    Mail::assertQueued(CodiceAccesso::class, fn (CodiceAccesso $m): bool => $m->hasTo('cliente@esempio.it')
         && preg_match('/^\d{6}$/', $m->codice) === 1);
 });
 
@@ -103,7 +112,7 @@ it('⚠️ nel database non finisce mai il codice, solo il suo hash', function (
     $this->post("/pay/{$token}", ['email' => 'cliente@esempio.it']);
 
     $codice = '';
-    Mail::assertSent(CodiceAccesso::class, function (CodiceAccesso $m) use (&$codice): bool {
+    Mail::assertQueued(CodiceAccesso::class, function (CodiceAccesso $m) use (&$codice): bool {
         $codice = $m->codice;
 
         return true;
@@ -121,7 +130,7 @@ it('riconsegna col codice digitato al chiosco', function () {
     $this->post("/pay/{$token}", ['email' => 'cliente@esempio.it']);
 
     $codice = '';
-    Mail::assertSent(CodiceAccesso::class, function (CodiceAccesso $m) use (&$codice): bool {
+    Mail::assertQueued(CodiceAccesso::class, function (CodiceAccesso $m) use (&$codice): bool {
         $codice = $m->codice;
 
         return true;
