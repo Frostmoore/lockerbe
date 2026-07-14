@@ -37,7 +37,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 final class ProtectEmulator
 {
     /** La chiave in sessione che dice "questo browser ha gia' dato la password". */
-    public const SESSIONE = 'emulator.sbloccato';
+    public const string SESSIONE = 'emulator.sbloccato';
 
     public function handle(Request $request, Closure $next): Response
     {
