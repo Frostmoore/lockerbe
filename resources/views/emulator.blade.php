@@ -143,6 +143,52 @@
         /* L'immagine del contactless (vedi public/img/nfc.png). */
         .nfc-img { width: 190px; height: 190px; object-fit: contain; }
 
+        /*
+         * ⚠️ IL TASTO DEL TECNICO. Piccolo, in un angolo, grigio chiaro: **non deve invitare
+         * nessuno**. Un menu di impostazioni con un bottone grosso e colorato e' un menu che il
+         * cliente ubriaco preme per curiosita', e a quel punto sta guardando la configurazione
+         * WiFi dell'armadio.
+         */
+        #kiosk { position: relative; }
+
+        #btn-settings {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 2;
+            width: 38px;
+            height: 38px;
+            border: 0;
+            border-radius: 10px;
+            background: transparent;
+            color: #cbd5e1;
+            font-size: 19px;
+            cursor: pointer;
+            line-height: 1;
+        }
+        #btn-settings:hover { background: #f1f5f9; color: #64748b; }
+
+        /* Il menu tecnico: fondo scuro, apposta. Non e' una schermata per i clienti, e si vede. */
+        .tec {
+            width: 100%;
+            text-align: left;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .tec label { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px;
+                     text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+        .tec input, .tec select {
+            width: 100%; padding: 10px 12px; font-size: 15px;
+            border: 2px solid #cbd5e1; border-radius: 10px;
+            background: #f8fafc; color: #0b1220;
+            letter-spacing: normal; text-align: left; font-family: inherit;
+        }
+        .tec .riga { display: flex; justify-content: space-between; gap: 10px;
+                     padding: 8px 0; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+        .tec .riga b { color: #0b1220; }
+        .tec .riga span { color: #64748b; font-family: ui-monospace, Consolas, monospace; }
+
         /* ⚠️ Tasti NEUTRI (quelli che portano avanti): blu scuro, testo bianco. */
         .big-btn {
             width: 100%;
@@ -257,6 +303,10 @@
 
     {{-- Il vetro del tablet: tutto quello che il cliente vede sta qui dentro. --}}
     <div id="kiosk">
+        {{-- ⚠️ IL TASTO DEL TECNICO. Piccolo, in un angolo, grigio: non deve invitare nessuno.
+             Un cliente che ci finisce sopra per sbaglio trova un PIN, non un menu. --}}
+        <button id="btn-settings" title="Impostazioni">⚙</button>
+
         <div id="screen"></div>
     </div>
 </div>
@@ -351,7 +401,8 @@ function log(msg, cls = 'l-dim') {
 
 // ── Stato del chiosco ─────────────────────────────────────────────────────────
 let stato = { schermo: 'home', sessione: null, acceso: true, ackOk: true, ritarda: false,
-              posti: null, pollPosti: null, pollPagamento: null, intento: 'reopen' };
+              posti: null, pollPosti: null, pollPagamento: null, intento: 'reopen',
+              sbloccato: false };
 
 // ── HMAC: la stessa firma che calcola il server (CommandSigner) ───────────────
 async function firmaValida(cmd) {
@@ -582,6 +633,16 @@ function rfid(size = 110, classe = '') {
 async function render() {
     const s = $('screen');
 
+    // ⚠️ Il tasto ⚙ si vede solo quando NON c'è un cliente a metà operazione: interrompere una
+    // sessione di pagamento per aprire il menu WiFi non ha senso, e il tasto in un angolo di
+    // una schermata di pagamento è un invito a premerlo.
+    $('btn-settings').style.display = stato.schermo === 'home' ? 'block' : 'none';
+
+    if (['pin', 'settings'].includes(stato.schermo)) {
+        await renderImpostazioni(s);
+        return;
+    }
+
     if (stato.schermo === 'home') {
         const st = await api('/state');
         stato.posti = st;
@@ -775,6 +836,197 @@ async function render() {
 }
 
 
+/* ═══════════════════════════════════════════════════════════════════════════════
+ *  IL MENU DEL TECNICO
+ *
+ * ⚠️ QUESTA PASSWORD NON DIFENDE DA UN ATTACCANTE, E NON DEVE FINGERE DI FARLO.
+ *
+ * Sta nel `localStorage` del device, e chi apre gli strumenti di sviluppo — o smonta il
+ * FCV5003 — la aggira in dieci secondi. Il modello di minaccia qui è un altro, ed è quello
+ * vero: **il cliente ubriaco che smanetta sul touchscreen** mentre aspetta, e il curioso in
+ * fila. Da quelli difende benissimo.
+ *
+ * Ciò che protegge davvero l'armadio — le credenziali MQTT, la firma dei comandi, la revoca
+ * di un chiosco rubato — vive sul SERVER, e da qui non si tocca. Se un giorno da questo menu
+ * si potesse cambiare l'identità del device, allora sì che questa password diventerebbe una
+ * bugia pericolosa: perché sembrerebbe proteggere qualcosa che invece è a portata di
+ * chiunque abbia un cacciavite.
+ *
+ * ⚠️ Nel localStorage finisce lo SHA-256, non il PIN. Non è "sicurezza" (vedi sopra): è che
+ * un PIN in chiaro lo legge anche chi dà un'occhiata distratta allo schermo di un tecnico che
+ * ha gli strumenti aperti. Costa zero, evita una figuraccia.
+ * ═══════════════════════════════════════════════════════════════════════════════ */
+
+const PIN_KEY = 'lockerfe.pin';
+const CONF_KEY = 'lockerfe.conf';
+
+async function sha256(txt) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** La configurazione locale del device. Nel lockerfe vero: WiFi, luminosità, volume… */
+function conf() {
+    try { return JSON.parse(localStorage.getItem(CONF_KEY)) ?? {}; } catch { return {}; }
+}
+
+function salvaConf(c) {
+    localStorage.setItem(CONF_KEY, JSON.stringify(c));
+}
+
+/**
+ * ⚠️ Uscire dal menu RICHIUDE la porta.
+ *
+ * Un tecnico che se ne va lasciando il menu aperto è la norma, non l'eccezione: ha finito,
+ * gli squilla il telefono, e va via. Se il menu restasse sbloccato, il primo cliente della
+ * sera si troverebbe davanti la configurazione WiFi dell'armadio.
+ */
+function chiudiImpostazioni() {
+    stato.sbloccato = false;
+    stato.schermo = 'home';
+    render();
+}
+
+async function apriImpostazioni() {
+    stato.schermo = 'pin';
+    render();
+}
+
+async function renderImpostazioni(s) {
+    // ── 1. la porta: il PIN ───────────────────────────────────────────────────
+    if (stato.schermo === 'pin') {
+        const impostato = localStorage.getItem(PIN_KEY) !== null;
+
+        s.innerHTML = `
+            <h1>${impostato ? 'Impostazioni' : 'Primo avvio'}</h1>
+            <p class="sub">
+                ${impostato
+                    ? 'Riservato al tecnico. Inserisci il PIN.'
+                    : 'Non c\'è ancora un PIN su questo chiosco: scegline uno adesso.'}
+            </p>
+
+            <input id="pin" type="password" inputmode="numeric" maxlength="8" placeholder="••••">
+
+            <div class="row">
+                <button class="big-btn" id="pin-ok">${impostato ? 'Entra' : 'Imposta il PIN'}</button>
+                <button class="big-btn gray" id="pin-annulla">Annulla</button>
+            </div>`;
+
+        $('pin-annulla').onclick = () => { stato.schermo = 'home'; render(); };
+
+        $('pin-ok').onclick = async () => {
+            const pin = $('pin').value.trim();
+
+            if (pin.length < 4) { alert('Il PIN è di almeno 4 cifre.'); return; }
+
+            // ⚠️ Primo avvio: il PIN lo sceglie il tecnico che monta l'armadio. Un PIN di
+            // fabbrica uguale per tutti i chioschi sarebbe un PIN che, il giorno che trapela,
+            // apre il menu di TUTTI gli armadi installati.
+            if (!impostato) {
+                localStorage.setItem(PIN_KEY, await sha256(pin));
+                log('PIN del chiosco impostato', 'l-warn');
+                stato.sbloccato = true;
+                stato.schermo = 'settings';
+                render();
+                return;
+            }
+
+            if (await sha256(pin) !== localStorage.getItem(PIN_KEY)) {
+                log('PIN sbagliato', 'l-err');
+                alert('PIN sbagliato.');
+                return;
+            }
+
+            stato.sbloccato = true;
+            stato.schermo = 'settings';
+            render();
+        };
+        return;
+    }
+
+    // ── 2. il menu vero ───────────────────────────────────────────────────────
+    if (stato.schermo === 'settings') {
+        // ⚠️ Non ci si arriva senza essere passati dal PIN, nemmeno cambiando `stato` a mano
+        // dalla console: se qualcuno lo fa, non e' piu' un problema di interfaccia.
+        if (!stato.sbloccato) { stato.schermo = 'pin'; render(); return; }
+
+        const c = conf();
+
+        s.innerHTML = `
+            <h1>Impostazioni</h1>
+            <p class="sub" style="font-size:14px">
+                Configurazione locale del chiosco. Nel <b>lockerfe</b> vero questi campi
+                pilotano il modulo WiFi e il display.
+            </p>
+
+            <div class="tec">
+                <div>
+                    <label for="ssid">Rete WiFi (SSID)</label>
+                    <input id="ssid" type="text" value="${c.ssid ?? ''}" placeholder="LOCALE-WIFI">
+                </div>
+
+                <div>
+                    <label for="wpa">Password WiFi</label>
+                    <input id="wpa" type="password" value="${c.wpa ?? ''}" placeholder="••••••••">
+                </div>
+
+                <div>
+                    <label for="srv">Indirizzo del server</label>
+                    <input id="srv" type="text" value="${c.srv ?? location.origin}">
+                </div>
+
+                <div>
+                    <label for="lum">Luminosità</label>
+                    <select id="lum">
+                        <option value="40"  ${c.lum == 40  ? 'selected' : ''}>40% — locale buio</option>
+                        <option value="70"  ${c.lum == 70  ? 'selected' : ''}>70%</option>
+                        <option value="100" ${(c.lum ?? 100) == 100 ? 'selected' : ''}>100% — pieno sole</option>
+                    </select>
+                </div>
+
+                {{-- ⚠️ SOLA LETTURA, e non e' una dimenticanza. L'identita' del chiosco e le sue
+                     credenziali MQTT arrivano DAL SERVER e non si toccano da qui: un menu che
+                     potesse cambiarle sarebbe un menu che, con un cacciavite, si prende
+                     l'armadio di qualcun altro. Se un chiosco va rifatto, il tecnico preme
+                     "Attiva" sul pannello — un gesto solo, e tracciato. --}}
+                <div style="margin-top:6px">
+                    <label>Identità (dal server — non modificabile)</label>
+                    <div class="riga"><b>Armadio</b><span>{{ $cabinet->code }}</span></div>
+                    <div class="riga"><b>Seriale</b><span>{{ $device->serial }}</span></div>
+                    <div class="riga"><b>Client MQTT</b><span>${CFG.clientId}</span></div>
+                </div>
+            </div>
+
+            <div class="row">
+                <button class="big-btn" id="set-salva">Salva</button>
+                <button class="big-btn gray" id="set-pin">Cambia PIN</button>
+                <button class="big-btn gray" id="set-esci">Esci</button>
+            </div>`;
+
+        $('set-salva').onclick = () => {
+            salvaConf({
+                ssid: $('ssid').value.trim(),
+                wpa: $('wpa').value,
+                srv: $('srv').value.trim(),
+                lum: $('lum').value,
+            });
+            log('impostazioni salvate nel device', 'l-out');
+            chiudiImpostazioni();
+        };
+
+        $('set-pin').onclick = () => {
+            localStorage.removeItem(PIN_KEY);
+            stato.sbloccato = false;
+            stato.schermo = 'pin';
+            render();
+        };
+
+        // ⚠️ Uscire richiude la porta: vedi chiudiImpostazioni().
+        $('set-esci').onclick = chiudiImpostazioni;
+        return;
+    }
+}
+
 /**
  * ⚠️ IL CLIENTE HA CAMBIATO IDEA. Il vano torna libero SUBITO.
  *
@@ -904,6 +1156,8 @@ function appoggiaCarta() {
 
     log('nessuno sta chiedendo la carta adesso', 'l-warn');
 }
+
+$('btn-settings').onclick = apriImpostazioni;
 
 $('btn-tap').onclick = appoggiaCarta;
 
