@@ -7,28 +7,22 @@ use App\Http\Middleware\ProtectEmulator;
 use Illuminate\Support\Facades\Route;
 
 /*
- * LA HOME.
+ * LA HOME — la pagina pubblica.
  *
- * ⚠️ Non c'è un sito pubblico da mostrare: LockUpWorld è un pannello e un chiosco. La pagina di
- * benvenuto di Laravel su un dominio in produzione dice una cosa sola — "qui non è ancora
- * finito niente" — e la dice a chiunque passi.
+ * ⚠️ Fino a ieri reindirizzava al pannello: era giusto quando l'unica cosa che c'era era il
+ * pannello. Ma un dominio che, a chiunque passi, risponde con una schermata di login dice una
+ * cosa sola — *"qui non c'è niente per te"* — e la dice anche a chi stava valutando se comprarlo.
  *
- * ⚠️ La destinazione DIPENDE da chi bussa, e non è un vezzo: i due pannelli si respingono a
- * vicenda (`User::canAccessPanel()`). Un platform_admin mandato su `/app` prende un 403, e un
- * gestore di locale mandato su `/admin` pure. Mandare tutti nello stesso posto vorrebbe dire
- * che metà degli utenti sbatte contro un muro appena atterrato.
+ * ⚠️ È l'unica pagina che vede **chi non è nessuno**. Quindi non contiene niente che non sia
+ * pubblico: nessun conteggio di armadi, nessun nome di locale, nessuno stato di sistema. È il
+ * modo tipico in cui queste pagine perdono informazioni — si aggiunge *"giusto il numero di
+ * locali attivi"* per far vedere che il prodotto è vivo, e si è appena detto a un estraneo
+ * quanti clienti abbiamo.
+ *
+ * Il link "vai al pannello" tiene conto di chi bussa: i due pannelli si respingono a vicenda, e
+ * offrire il link sbagliato vorrebbe dire offrire un rimbalzo.
  */
-Route::get('/', function () {
-    $utente = auth()->user();
-
-    if ($utente === null) {
-        // Chi non è entrato va al pannello dei locali: è quello che useranno quasi tutti.
-        // Filament lo dirotta da sé sul login, e dopo il login lo riporta qui.
-        return redirect('/app');
-    }
-
-    return redirect($utente->isPlatformAdmin() ? '/admin' : '/app');
-})->name('home');
+Route::view('/', 'landing')->name('home');
 
 /*
  * ⚠️ L'EMULATORE DEL CHIOSCO.

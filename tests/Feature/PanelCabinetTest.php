@@ -137,12 +137,39 @@ it('lascia che sia la piattaforma a decidere il prezzo', function () {
     expect($armadio->refresh()->tariff_cents)->toBe(990);
 });
 
-it('manda la home al pannello giusto, e non alla pagina di benvenuto di Laravel', function () {
-    $this->get('/')->assertRedirect('/app');
+it('la home è una pagina pubblica, e non chiede a nessuno di autenticarsi', function () {
+    // ⚠️ Un dominio che risponde a chiunque passi con una schermata di login dice una cosa sola:
+    //    "qui non c'è niente per te". Anche a chi stava valutando se comprarlo.
+    $this->get('/')
+        ->assertOk()
+        ->assertSee('LockUpWorld')
+        ->assertDontSee('Password');   // nessun form di login in faccia a un visitatore
+});
 
-    $this->actingAs($this->gestore)->get('/')->assertRedirect('/app');
+it('⚠️ la home non dice NIENTE a un estraneo sul parco clienti', function () {
+    /*
+     * ⚠️ È il modo tipico in cui queste pagine perdono informazioni: si aggiunge "giusto il
+     *    numero di locali attivi" per far vedere che il prodotto è vivo, e si è appena detto a
+     *    un estraneo quanti clienti abbiamo — e, con qualche visita nel tempo, come stiamo
+     *    andando.
+     *
+     * Il test è volutamente stupido: crea un locale con un nome inconfondibile e verifica che
+     * quel nome NON compaia. Se un giorno qualcuno aggiungerà una vetrina "i nostri clienti",
+     * questo test lo sveglierà.
+     */
+    Tenant::factory()->create(['name' => 'Teatro Segretissimo']);
 
-    // ⚠️ Un platform_admin su /app prende un 403: mandarlo lì sarebbe mandarlo contro un muro.
+    $risposta = $this->get('/');
+
+    $risposta->assertOk()->assertDontSee('Teatro Segretissimo');
+    expect($risposta->getContent())->not->toContain($this->locale->name);
+});
+
+it('offre a chi è già dentro il link al SUO pannello, non a quello che lo respinge', function () {
+    // I due pannelli si respingono a vicenda: offrire il link sbagliato è offrire un rimbalzo.
+    $this->actingAs($this->gestore)->get('/')->assertSee('href="/app"', escape: false);
+
     Auth::forgetGuards();
-    $this->actingAs($this->piattaforma)->get('/')->assertRedirect('/admin');
+
+    $this->actingAs($this->piattaforma)->get('/')->assertSee('href="/admin"', escape: false);
 });
