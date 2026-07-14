@@ -36,6 +36,25 @@ return [
     'mock_panel' => (bool) env('LOCKER_MOCK_PANEL', false),
 
     /*
+     * La password dell'emulatore — il TERZO lucchetto (§ ProtectEmulator).
+     *
+     * ⚠️ Il doppio cancello qui sopra non basta: promette "non esiste in produzione", ma lo
+     * promette guardando `APP_ENV`, e il server vero — su un dominio pubblico — gira
+     * `APP_ENV=staging` col flag acceso. La pagina era aperta a chiunque, e da li' si leggono
+     * le credenziali MQTT dei chioschi.
+     *
+     * Hash **bcrypt**, non la password in chiaro. Puo' arrivare con qualunque prefisso
+     * (`$2a$`, `$2b$`, `$2y$`): ci pensa `App\Support\Bcrypt` a normalizzarlo — vedi la
+     * trappola 30, un `$2a$` passato a `Hash::check()` non risponde `false`, **esplode**.
+     *
+     * ⚠️ Vuota = **emulatore chiuso** (fail-closed). Una configurazione dimenticata non deve
+     * mai voler dire "entra pure".
+     */
+    'emulator' => [
+        'password_hash' => (string) env('LOCKER_EMULATOR_PASSWORD_HASH', ''),
+    ],
+
+    /*
      * TTL dei comandi (piano §8) — il rischio #1 del sistema.
      *
      * Un `open` accodato mentre l'armadio e' offline e consegnato tre ore dopo apre
