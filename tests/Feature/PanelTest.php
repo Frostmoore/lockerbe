@@ -61,13 +61,25 @@ it('⚠️ non lascia entrare un utente di un locale nel pannello di piattaforma
     // ⚠️ IL TEST PIU' IMPORTANTE DI QUESTA FASE. Il pannello /admin gira **in bypass**: chi
     // ci entra vede i dati di TUTTI i clienti. `canAccessPanel()` e' l'unica cosa che sta in
     // mezzo — e non e' un pezzo del parco clienti che trapelerebbe: e' tutto.
-    $this->actingAs($this->gestore)->get('/admin')->assertForbidden();
+    //
+    // ⚠️ Da v8.3.1 la risposta non e' piu' un 403 ma un **rimbalzo sul suo pannello**: chi e'
+    // gia' autenticato e ha un pannello legittimo non deve sbattere contro un muro
+    // (`RedirectToOwnPanel`). Il confine e' identico — cambia solo come viene detto.
+    //
+    // ⚠️⚠️ Ma qui non basta verificare il redirect: bisogna verificare che **niente del
+    // pannello di piattaforma sia finito nel corpo della risposta**. Un rimbalzo che rendesse
+    // mezza pagina prima di rimbalzare sarebbe mezza pagina con gli armadi di tutti i clienti
+    // — e il test, guardando solo lo status, direbbe che va tutto bene.
+    $risposta = $this->actingAs($this->gestore)->get('/admin');
+
+    $risposta->assertRedirect('/app');
+    expect($risposta->getContent())->not->toContain('Locali');   // la voce di menu di /admin
 });
 
 it('non lascia entrare un platform_admin nel pannello dei locali', function () {
     // Non e' simmetria per bellezza: un platform_admin dentro /app girerebbe in bypass, e
     // vedrebbe la lista "del suo locale" popolata con gli armadi di tutti.
-    $this->actingAs($this->admin)->get('/app')->assertForbidden();
+    $this->actingAs($this->admin)->get('/app')->assertRedirect('/admin');
 });
 
 it('non lascia entrare un account disabilitato', function () {

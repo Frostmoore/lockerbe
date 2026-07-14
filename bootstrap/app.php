@@ -14,9 +14,11 @@ use App\Domain\Session\Exceptions\IllegalTransitionException;
 use App\Domain\Session\Exceptions\NoLockerAvailableException;
 use App\Domain\Tenancy\Middleware\EstablishTenantContext;
 use App\Domain\Tenancy\Middleware\ResolveTenant;
+use App\Http\Middleware\RedirectToOwnPanel;
 use App\Mqtt\Console\MqttListen;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -78,6 +80,32 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prependToPriorityList(
             before: SubstituteBindings::class,
             prepend: ResolveTenant::class,
+        );
+
+        /*
+         * ⚠️ **L'ORDINE SCRITTO IN `authMiddleware()` NON È L'ORDINE DI ESECUZIONE.**
+         *
+         * Laravel tiene una **lista di priorità** e, prima di eseguire, ci risistema dentro i
+         * middleware che vi compaiono. L'autenticazione è in quella lista — e quella di Filament
+         * (`Filament\Http\Middleware\Authenticate`, che chiama `canAccessPanel()` e aborta con un
+         * 403) viene quindi **tirata in avanti**, scavalcando qualunque middleware nostro che
+         * nell'array le stia davanti.
+         *
+         * Risultato: `RedirectToOwnPanel`, messo per primo in `authMiddleware()`, girava **dopo**
+         * il 403 — cioè mai. Il codice sembrava giusto e non faceva niente.
+         *
+         * ⚠️⚠️ **E il riferimento va dato all'INTERFACCIA, non alla classe.** La lista di priorità
+         * di Laravel non contiene `Illuminate\Auth\Middleware\Authenticate`: contiene il contratto
+         * `AuthenticatesRequests`. Chiedere "prima di Authenticate" nomina qualcosa che in quella
+         * lista **non c'è** — e `addToMiddlewarePriorityRelative()` non lo trova, non protesta, e
+         * accoda il middleware **in fondo**. Cioè esattamente dove non deve stare, in silenzio.
+         *
+         * Con questa riga l'ordine effettivo diventa quello scritto:
+         *     RedirectToOwnPanel → Authenticate (canAccessPanel) → ResolveTenant → MFA
+         */
+        $middleware->prependToPriorityList(
+            before: AuthenticatesRequests::class,
+            prepend: RedirectToOwnPanel::class,
         );
     })
     ->withExceptions(function (Exceptions $exceptions): void {

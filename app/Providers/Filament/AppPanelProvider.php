@@ -13,6 +13,7 @@ use App\Filament\Resources\DeviceResource;
 use App\Filament\Resources\LockerResource;
 use App\Filament\Resources\SessionResource;
 use App\Filament\Resources\UserResource;
+use App\Http\Middleware\RedirectToOwnPanel;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -104,6 +105,15 @@ class AppPanelProvider extends PanelProvider
                 DispatchServingFilamentEvent::class,
             ])
             ->authMiddleware([
+                // ⚠️ PRIMA di `Authenticate`, che è quello che chiama `canAccessPanel()` e aborta
+                //    con un 403. Dopo, non verrebbe mai raggiunto.
+                //
+                //    I due pannelli si respingono a vicenda, e deve restare così. Ma chi è già
+                //    entrato e finisce su quello sbagliato va PORTATO sul suo, non sbattuto
+                //    contro un muro: il confine è già applicato, e un 403 in più non protegge
+                //    niente — fa solo sembrare rotto un sistema che sta funzionando.
+                RedirectToOwnPanel::class,
+
                 Authenticate::class,
 
                 // ⚠️ Vedi il commento in testa alla classe: senza `isPersistent`, ogni click
